@@ -1,0 +1,8 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/">
+        <file>resources/sounds/select.mp3</file>
+        <file>resources/sounds/move.mp3</file>
+        <file>resources/sounds/capture.mp3</file>
+    </qresource>
+</RCC>

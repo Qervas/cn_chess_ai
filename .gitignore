@@ -1,0 +1,49 @@
+# Ignore Qt project files
+*.user
+
+# Ignore build directory
+build/
+
+# Ignore executable files
+*.exe
+*.out
+
+# Ignore Qt Creator files
+*.pro.user
+*.pro.user.*
+
+# Ignore CMake generated files except for the main CMakeLists.txt
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+install_manifest.txt
+
+# Ignore object files
+*.o
+
+# Ignore debugging files
+*.debug
+
+# Ignore Qt's MOC, UI and RCC temporary files
+moc_*.cpp
+ui_*.h
+qrc_*.cpp
+
+# Ignore backup files
+*~
+
+# If you're using version control for the first time on an existing project,
+# you might not want to commit all existing binaries or other generated files
+*.dll
+*.so
+*.dylib
+
+# Ignore any personal IDE or editor specific files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.ncb
+*.sln
+*.vcxproj*
