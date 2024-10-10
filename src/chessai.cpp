@@ -16,18 +16,18 @@ ChessAI::ChessAI(ChessBoard* board, QObject *parent)
 QPair<QPair<int, int>, QPair<int, int>> ChessAI::getAIMove(PieceColor color)
 {
     QVector<double> state = getStateRepresentation();
-    int maxAttempts = 10; // Maximum number of attempts to find a valid move
+    int maxAttempts = 1; // Maximum number of attempts to find a valid move
 
     for (int attempt = 0; attempt < maxAttempts; ++attempt) {
         int action = dqn->selectAction(state, 0.1); // 0.1 is the exploration rate, you can adjust this
         int fromRow, fromCol, toRow, toCol;
         actionToMove(action, fromRow, fromCol, toRow, toCol);
+        auto validMoves = board->getValidMoves(fromRow, fromCol); //this line takes HALF A SECOND to complete
 
         // check if the move is valid
         if (board->getPieceAt(fromRow, fromCol).color == color &&
-            !board->getValidMoves(fromRow, fromCol).isEmpty()) {
+            !validMoves.isEmpty()) {
 
-            QVector<QPair<int, int>> validMoves = board->getValidMoves(fromRow, fromCol);
             bool isValidMove = false;
             for (const auto& move : validMoves) {
                 if (move.first == toRow && move.second == toCol) {
