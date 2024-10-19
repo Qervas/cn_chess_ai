@@ -1,6 +1,18 @@
 #include "mainwindow.h"
 #include "chessai.h"
+#include <QMediaPlayer>
+#include <QProcess>
 
+QMediaPlayer *createMediaPlayer(QObject *parent) {
+    QMediaPlayer *player = new QMediaPlayer(parent);
+    if (!player->isAvailable()) {
+        delete player;
+        qDebug() << "Default backend not available, trying GStreamer";
+        QProcess::execute("export", QStringList() << "QT_MULTIMEDIA_PREFERRED_PLUGINS=gstreamer");
+        player = new QMediaPlayer(parent);
+    }
+    return player;
+}
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), currentPlayer(PieceColor::Red), redScore(0), blackScore(0), gameStarted(false),
@@ -20,9 +32,9 @@ MainWindow::MainWindow(QWidget *parent)
     statusBar()->addPermanentWidget(blackScoreLabel);
 
     // Initialize sound effects
-    selectSound = new QMediaPlayer(this);
-    moveSound = new QMediaPlayer(this);
-    captureSound = new QMediaPlayer(this);
+    selectSound = createMediaPlayer(this);
+    moveSound = createMediaPlayer(this);
+    captureSound = createMediaPlayer(this);
     selectSound->setSource(QUrl("qrc:/resources/sounds/select.mp3"));
     moveSound->setSource(QUrl("qrc:/resources/sounds/move.mp3"));
     captureSound->setSource(QUrl("qrc:/resources/sounds/capture.mp3"));

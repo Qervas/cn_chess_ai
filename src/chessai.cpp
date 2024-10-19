@@ -1,21 +1,26 @@
 #include "chessai.h"
 #include <QDebug>
+#include <cstdlib>
 
 ChessAI::ChessAI(ChessBoard* board, QObject *parent)
     : QObject(parent), board(board)
 {
-    int stateSize = 90 * 14; // 90 squares, 14 possible pieces (7 types * 2 colors)
-    int actionSize = 90 * 89; // From any square to any other square
-    int hiddenSize = 256;
-    double learningRate = 0.001;
-    double gamma = 0.99;
-    int batchSize = 32;
-    dqn = std::make_unique<DQN>(stateSize, actionSize, hiddenSize, learningRate, gamma, batchSize);
+    // Reduce state size by using a more compact representation
+    int stateSize = 90 * 7; // 90 squares, 7 piece types (ignore color for now)
+
+    // Reduce action size by encoding moves more efficiently
+    int actionSize = 90 * 4; // 90 source squares, 4 directions (up, down, left, right)
+
+    // Reduce hidden layer size
+    int hiddenSize = 128;
+
+    // Create the network with smaller dimensions
+    dqn = std::make_unique<DQN>(std::vector<int>{stateSize, hiddenSize, actionSize});
 }
 
 QPair<QPair<int, int>, QPair<int, int>> ChessAI::getAIMove(PieceColor color)
 {
-    QVector<double> state = getStateRepresentation();
+    std::vector<double> state = getStateRepresentation();
     int maxAttempts = 1; // Maximum number of attempts to find a valid move
 
     for (int attempt = 0; attempt < maxAttempts; ++attempt) {
@@ -77,7 +82,7 @@ void ChessAI::train(int numEpisodes)
     for (int episode = 0; episode < numEpisodes; ++episode) {
         board->reset();
         PieceColor currentPlayer = PieceColor::Red;
-        QVector<double> state = getStateRepresentation();
+        std::vector<double> state = getStateRepresentation();
 
         while (!board->checkGameOver()) {
             int action = dqn->selectAction(state, 0.1);
@@ -87,12 +92,17 @@ void ChessAI::train(int numEpisodes)
             ChessPiece capturedPiece = board->movePiece(fromRow, fromCol, toRow, toCol);
             double reward = evaluateBoard(currentPlayer);
 
-            QVector<double> nextState = getStateRepresentation();
-            bool done = board->checkGameOver();
+            std::vector<double> targetQ = dqn->getQValues(state);
+            if (capturedPiece.type != PieceType::Empty) {
+                targetQ[action] = reward;
+            } else {
+                std::vector<double> nextQ = dqn->getQValues(getStateRepresentation());
+                targetQ[action] = reward + gamma * *std::max_element(nextQ.begin(), nextQ.end());
+            }
 
-            dqn->train(state, action, reward, nextState, done);
+            dqn->backpropagate(state, targetQ, learningRate);
 
-            state = nextState;
+            state = getStateRepresentation();
             currentPlayer = (currentPlayer == PieceColor::Red) ? PieceColor::Black : PieceColor::Red;
         }
 
@@ -106,75 +116,19 @@ void ChessAI::train(int numEpisodes)
 
 void ChessAI::saveModel(const QString& filename)
 {
-    dqn->saveModel(filename);
+    dqn->saveModel(filename.toStdString());
 }
 
 void ChessAI::loadModel(const QString& filename)
 {
-    dqn->loadModel(filename);
-}
-
-QVector<double> ChessAI::getStateRepresentation()
-{
-    QVector<double> state(90 * 14, 0.0);
-    for (int i = 0; i < 10; ++i) {
-        for (int j = 0; j < 9; ++j) {
-            ChessPiece piece = board->getPieceAt(i, j);
-            int index = i * 9 + j;
-            if (piece.type != PieceType::Empty) {
-                int pieceIndex = static_cast<int>(piece.type) - 1;
-                if (piece.color == PieceColor::Black) {
-                    pieceIndex += 7;
-                }
-                state[index * 14 + pieceIndex] = 1.0;
-            }
-        }
-    }
-    return state;
-}
-
-int ChessAI::actionToMove(int action, int& fromRow, int& fromCol, int& toRow, int& toCol)
-{
-    int from = action / 89;
-    int to = action % 89;
-    if (to >= from) ++to;
-    fromRow = from / 9;
-    fromCol = from % 9;
-    toRow = to / 9;
-    toCol = to % 9;
-    return 0;
-}
-
-int ChessAI::moveToAction(int fromRow, int fromCol, int toRow, int toCol)
-{
-    int from = fromRow * 9 + fromCol;
-    int to = toRow * 9 + toCol;
-    if (to > from) --to;
-    return from * 89 + to;
-}
-
-int ChessAI::evaluateBoard(PieceColor color)
-{
-    // todo: simple evaluation function, need to improve
-    int score = 0;
-    for (int i = 0; i < 10; ++i) {
-        for (int j = 0; j < 9; ++j) {
-            ChessPiece piece = board->getPieceAt(i, j);
-            if (piece.color == color) {
-                score += static_cast<int>(piece.type);
-            } else if (piece.color != PieceColor::None) {
-                score -= static_cast<int>(piece.type);
-            }
-        }
-    }
-    return score;
+    dqn->loadModel(filename.toStdString());
 }
 
 void ChessAI::startSelfPlay(int numGames)
 {
     for (int i = 0; i < numGames; ++i) {
         board->reset();
-        QVector<double> state = getStateRepresentation();
+        std::vector<double> state = getStateRepresentation();
 
         while (!board->checkGameOver()) {
             PieceColor currentPlayer = board->getCurrentPlayer();
@@ -191,13 +145,13 @@ void ChessAI::startSelfPlay(int numGames)
             double reward = evaluateBoard(currentPlayer);
 
             // Get new state
-            QVector<double> nextState = getStateRepresentation();
+            std::vector<double> nextState = getStateRepresentation();
 
             // Check if game is over
             bool done = board->checkGameOver();
 
             // Train DQN
-            dqn->train(state, action, reward, nextState, done);
+            dqn->backpropagate(state, std::vector<double>{}, learningRate); // Adjust as needed
 
             // Update state
             state = nextState;
@@ -220,4 +174,81 @@ void ChessAI::startSelfPlay(int numGames)
         qDebug() << "Game" << i + 1 << "completed. Winner:" << (winner == PieceColor::Red ? "Red" : "Black")
                  << "Red score:" << board->getRedScore() << "Black score:" << board->getBlackScore();
     }
+}
+
+std::vector<double> ChessAI::getStateRepresentation()
+{
+    std::vector<double> state;
+    state.reserve(90 * 14); // 90 squares, 14 possible pieces (7 types * 2 colors)
+
+    for (int row = 0; row < 10; ++row) {
+        for (int col = 0; col < 9; ++col) {
+            ChessPiece piece = board->getPieceAt(row, col);
+            std::vector<double> pieceEncoding(14, 0.0);
+            if (piece.type != PieceType::Empty) {
+                int index = static_cast<int>(piece.type) - 1;
+                if (piece.color == PieceColor::Black) {
+                    index += 7;
+                }
+                pieceEncoding[index] = 1.0;
+            }
+            state.insert(state.end(), pieceEncoding.begin(), pieceEncoding.end());
+        }
+    }
+
+    return state;
+}
+
+int ChessAI::actionToMove(int action, int& fromRow, int& fromCol, int& toRow, int& toCol)
+{
+    int fromSquare = action / 89;
+    int toSquare = action % 89;
+
+    fromRow = fromSquare / 9;
+    fromCol = fromSquare % 9;
+    toRow = toSquare / 9;
+    toCol = toSquare % 9;
+
+    return action;
+}
+
+int ChessAI::moveToAction(int fromRow, int fromCol, int toRow, int toCol)
+{
+    int fromSquare = fromRow * 9 + fromCol;
+    int toSquare = toRow * 9 + toCol;
+    return fromSquare * 89 + toSquare;
+}
+
+int ChessAI::evaluateBoard(PieceColor color)
+{
+    int score = 0;
+    for (int row = 0; row < 10; ++row) {
+        for (int col = 0; col < 9; ++col) {
+            ChessPiece piece = board->getPieceAt(row, col);
+            if (piece.color == color) {
+                switch (piece.type) {
+                    case PieceType::General: score += 1000; break;
+                    case PieceType::Advisor: score += 20; break;
+                    case PieceType::Elephant: score += 20; break;
+                    case PieceType::Horse: score += 40; break;
+                    case PieceType::Chariot: score += 90; break;
+                    case PieceType::Cannon: score += 45; break;
+                    case PieceType::Soldier: score += 10; break;
+                    default: break;
+                }
+            } else if (piece.color != PieceColor::None) {
+                switch (piece.type) {
+                    case PieceType::General: score -= 1000; break;
+                    case PieceType::Advisor: score -= 20; break;
+                    case PieceType::Elephant: score -= 20; break;
+                    case PieceType::Horse: score -= 40; break;
+                    case PieceType::Chariot: score -= 90; break;
+                    case PieceType::Cannon: score -= 45; break;
+                    case PieceType::Soldier: score -= 10; break;
+                    default: break;
+                }
+            }
+        }
+    }
+    return score;
 }

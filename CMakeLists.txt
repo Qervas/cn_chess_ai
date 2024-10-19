@@ -76,3 +76,4 @@ target_link_libraries(ChessAI PRIVATE
     ${CUDA_LIBRARIES}
     ${CUDNN_LIBRARIES}
 )
+

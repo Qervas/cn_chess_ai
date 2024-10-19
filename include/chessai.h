@@ -5,10 +5,10 @@
 #include <QRandomGenerator>
 #include <QVariant>
 #include <QString>
-#include <QVector>
+#include <vector> // Include the vector header
 #include <QPair>
 #include "chessboard.h"
-#include "dqn.h"
+#include "dqn.h" // Include DQN definition
 
 class ChessAI : public QObject
 {
@@ -27,12 +27,15 @@ signals:
 
 private:
     ChessBoard* board;
-    std::unique_ptr<DQN> dqn;
-    QVector<double> getStateRepresentation();
+    std::unique_ptr<DQN> dqn; // Ensure DQN uses the CUDA-enabled NeuralNetwork
+    std::vector<double> getStateRepresentation(); // Changed to std::vector<double>
     int actionToMove(int action, int& fromRow, int& fromCol, int& toRow, int& toCol);
     int moveToAction(int fromRow, int fromCol, int toRow, int toCol);
     int evaluateBoard(PieceColor color);
-
+    
+    // Add learningRate and gamma as member variables
+    double learningRate = 0.001;
+    double gamma = 0.99;
 };
 
 #endif // CHESSAI_H
