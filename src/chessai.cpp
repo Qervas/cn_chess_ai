@@ -5,34 +5,27 @@
 ChessAI::ChessAI(ChessBoard* board, QObject *parent)
     : QObject(parent), board(board)
 {
-    // Reduce state size by using a more compact representation
-    int stateSize = 90 * 7; // 90 squares, 7 piece types (ignore color for now)
+    // Define state and action sizes based on the new representation
+    int stateSize = 90 * 14; // 90 squares, 14 possible pieces (7 types * 2 colors)
+    int actionSize = 90 * 90; // From any square to any square
 
-    // Reduce action size by encoding moves more efficiently
-    int actionSize = 90 * 4; // 90 source squares, 4 directions (up, down, left, right)
-
-    // Reduce hidden layer size
-    int hiddenSize = 128;
-
-    // Create the network with smaller dimensions
-    dqn = std::make_unique<DQN>(std::vector<int>{stateSize, hiddenSize, actionSize});
+    // Initialize the DQN with the specified architecture
+    dqn = std::make_unique<DQN>(std::vector<int>{stateSize, 128, actionSize});
 }
 
 QPair<QPair<int, int>, QPair<int, int>> ChessAI::getAIMove(PieceColor color)
 {
     std::vector<double> state = getStateRepresentation();
-    int maxAttempts = 1; // Maximum number of attempts to find a valid move
+    int maxAttempts = 10; // Increased attempts for better move selection
 
     for (int attempt = 0; attempt < maxAttempts; ++attempt) {
-        int action = dqn->selectAction(state, 0.1); // 0.1 is the exploration rate, you can adjust this
+        int action = dqn->selectAction(state, 0.1); // 0.1 exploration rate
         int fromRow, fromCol, toRow, toCol;
         actionToMove(action, fromRow, fromCol, toRow, toCol);
-        auto validMoves = board->getValidMoves(fromRow, fromCol); //this line takes HALF A SECOND to complete
+        QVector<QPair<int, int>> validMoves = board->getValidMoves(fromRow, fromCol);
 
-        // check if the move is valid
-        if (board->getPieceAt(fromRow, fromCol).color == color &&
-            !validMoves.isEmpty()) {
-
+        // Check if the move is valid
+        if (board->getPieceAt(fromRow, fromCol).color == color && !validMoves.isEmpty()) {
             bool isValidMove = false;
             for (const auto& move : validMoves) {
                 if (move.first == toRow && move.second == toCol) {
@@ -45,11 +38,9 @@ QPair<QPair<int, int>, QPair<int, int>> ChessAI::getAIMove(PieceColor color)
                 return qMakePair(qMakePair(fromRow, fromCol), qMakePair(toRow, toCol));
             }
         }
-
-        //  If the move is invalid, continue to the next attempt
     }
 
-    // If no legal move is found after multiple attempts, randomly select a legal move
+    // If no valid move found, select a random valid move
     QVector<QPair<int, int>> allPieces;
     for (int i = 0; i < 10; ++i) {
         for (int j = 0; j < 9; ++j) {
@@ -73,7 +64,7 @@ QPair<QPair<int, int>, QPair<int, int>> ChessAI::getAIMove(PieceColor color)
         allPieces.removeAt(randomIndex);
     }
 
-    // If there are no legal moves, return an invalid move
+    // If no legal moves, return an invalid move
     return qMakePair(qMakePair(-1, -1), qMakePair(-1, -1));
 }
 
@@ -92,25 +83,44 @@ void ChessAI::train(int numEpisodes)
             ChessPiece capturedPiece = board->movePiece(fromRow, fromCol, toRow, toCol);
             double reward = evaluateBoard(currentPlayer);
 
+            std::vector<double> nextState = getStateRepresentation();
+            bool done = board->checkGameOver();
+
+            // Compute target Q-values
             std::vector<double> targetQ = dqn->getQValues(state);
-            if (capturedPiece.type != PieceType::Empty) {
+            if (done) {
                 targetQ[action] = reward;
             } else {
-                std::vector<double> nextQ = dqn->getQValues(getStateRepresentation());
+                std::vector<double> nextQ = dqn->getQValues(nextState);
                 targetQ[action] = reward + gamma * *std::max_element(nextQ.begin(), nextQ.end());
             }
 
+            // Perform backpropagation
             dqn->backpropagate(state, targetQ, learningRate);
 
-            state = getStateRepresentation();
+            // Update state
+            state = nextState;
+
+            // Switch player
             currentPlayer = (currentPlayer == PieceColor::Red) ? PieceColor::Black : PieceColor::Red;
+
+            // Update target network every certain number of steps
+            if (board->getMoveCount() % 100 == 0) {
+                dqn->updateTargetNetwork();
+            }
         }
 
-        if (episode % 10 == 0) {
-            dqn->updateTargetNetwork();
+        // Game over, emit signal
+        PieceColor winner = board->getWinner();
+        emit gameCompleted(episode + 1, board->getRedScore(), board->getBlackScore());
+
+        // Save model every certain number of games
+        if ((episode + 1) % 100 == 0) {
+            saveModel(QString("model_after_%1_games.bin").arg(episode + 1));
         }
 
-        qDebug() << "Episode" << episode + 1 << "completed";
+        qDebug() << "Game" << episode + 1 << "completed. Winner:" << (winner == PieceColor::Red ? "Red" : "Black")
+                 << "Red score:" << board->getRedScore() << "Black score:" << board->getBlackScore();
     }
 }
 
@@ -201,8 +211,8 @@ std::vector<double> ChessAI::getStateRepresentation()
 
 int ChessAI::actionToMove(int action, int& fromRow, int& fromCol, int& toRow, int& toCol)
 {
-    int fromSquare = action / 89;
-    int toSquare = action % 89;
+    int fromSquare = action / 90; // Adjusted denominator
+    int toSquare = action % 90;   // Adjusted modulus
 
     fromRow = fromSquare / 9;
     fromCol = fromSquare % 9;
@@ -216,7 +226,7 @@ int ChessAI::moveToAction(int fromRow, int fromCol, int toRow, int toCol)
 {
     int fromSquare = fromRow * 9 + fromCol;
     int toSquare = toRow * 9 + toCol;
-    return fromSquare * 89 + toSquare;
+    return fromSquare * 90 + toSquare; // Adjusted multiplier
 }
 
 int ChessAI::evaluateBoard(PieceColor color)

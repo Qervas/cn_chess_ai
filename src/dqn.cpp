@@ -12,7 +12,7 @@ DQN::DQN(const std::vector<int>& layerSizes, double learningRate, double gamma)
       learningRate(learningRate),
       gamma(gamma)
 {
-    syncTargetNetwork();
+    updateTargetNetwork();
 }
 
 // Destructor
@@ -44,9 +44,8 @@ std::vector<double> DQN::getQValues(const std::vector<double>& state)
 }
 
 // Update target network to match Q-network
-void DQN::updateTargetNetwork()
-{
-    *targetNetwork = *qNetwork;
+void DQN::updateTargetNetwork() {
+    targetNetwork->copyWeightsAndBiasesFrom(*qNetwork);
 }
 
 // Save model weights and biases
@@ -150,18 +149,4 @@ void DQN::train(const std::vector<double>& state, int action, double reward, con
 
     // Perform backpropagation to update the network
     qNetwork->backpropagate(state, currentQ, learningRate);
-}
-
-// Sync target network with Q-network
-void DQN::syncTargetNetwork() {
-    // Directly copy the flattened weights and biases
-    qNetwork->host_weights = qNetwork->host_weights; // This line appears redundant
-    qNetwork->host_biases = qNetwork->host_biases;   // This line appears redundant
-
-    // Instead, you should copy from qNetwork to targetNetwork
-    targetNetwork->host_weights = qNetwork->host_weights;
-    targetNetwork->host_biases = qNetwork->host_biases;
-
-    // Copy to device
-    targetNetwork->copyToDevice();
 }

@@ -727,3 +727,4 @@ void MainWindow::highlightAIMove(int fromRow, int fromCol, int toRow, int toCol)
     buttons[fromRow][fromCol]->update();
     buttons[toRow][toCol]->update();
 }
+

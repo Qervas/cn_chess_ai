@@ -5,8 +5,8 @@
 #include <QRandomGenerator>
 #include <QVariant>
 #include <QString>
-#include <vector> // Include the vector header
 #include <QPair>
+#include <vector>
 #include "chessboard.h"
 #include "dqn.h" // Include DQN definition
 
@@ -33,7 +33,7 @@ private:
     int moveToAction(int fromRow, int fromCol, int toRow, int toCol);
     int evaluateBoard(PieceColor color);
     
-    // Add learningRate and gamma as member variables
+    // Learning parameters
     double learningRate = 0.001;
     double gamma = 0.99;
 };

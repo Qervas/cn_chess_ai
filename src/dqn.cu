@@ -19,7 +19,7 @@
         } \
     } while(0)
 
-// Constructor
+// Parameterized Constructor
 NeuralNetwork::NeuralNetwork(const std::vector<int>& layerSizes_)
     : layerSizes(layerSizes_)
 {
@@ -54,53 +54,6 @@ NeuralNetwork::NeuralNetwork(const std::vector<int>& layerSizes_)
         }
     }
 #endif
-}
-
-
-bool isMemoryAvailable(size_t requiredBytes) {
-   void* testAlloc = std::malloc(requiredBytes);
-   if (testAlloc) {
-       std::free(testAlloc);
-       return true;
-   }
-   return false;
-}
-
-void NeuralNetwork::initializeHostWeightsAndBiases() {
-    // Clear the vectors before reinitializing
-    host_weights.clear();
-    host_biases.clear();
-
-    // Calculate total number of weights and biases
-    size_t totalWeights = 0;
-    size_t totalBiases = 0;
-    for(int i = 0; i < numLayers; ++i) {
-        totalWeights += static_cast<size_t>(layerSizes[i]) * layerSizes[i+1];
-        totalBiases += layerSizes[i+1];
-    }
-
-    host_weights.reserve(totalWeights);
-    host_biases.reserve(totalBiases);
-
-    // Initialize random number generator
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_real_distribution<> dis(-0.05, 0.05); // Adjust range as needed
-
-    for(int i = 0; i < numLayers; ++i) {
-        int inputSize = layerSizes[i];
-        int outputSize = layerSizes[i+1];
-
-        for(int j = 0; j < inputSize; ++j) {
-            for(int k = 0; k < outputSize; ++k) {
-                host_weights.emplace_back(dis(gen));
-            }
-        }
-
-        for(int k = 0; k < outputSize; ++k) {
-            host_biases.emplace_back(0.0); // Initialize biases to zero
-        }
-    }
 }
 
 
@@ -155,7 +108,11 @@ NeuralNetwork::NeuralNetwork(NeuralNetwork&& other) noexcept
     other.d_weights = nullptr;
     other.d_biases = nullptr;
 #endif
+    // Invalidate the moved-from object's data
+    other.numLayers = 0;
+    // Vectors are moved; no need to clear
 }
+
 
 
 // Move assignment operator
@@ -177,17 +134,26 @@ NeuralNetwork& NeuralNetwork::operator=(NeuralNetwork&& other) noexcept {
         layerSizes = std::move(other.layerSizes);
         host_weights = std::move(other.host_weights);
         host_biases = std::move(other.host_biases);
+
+        // Invalidate the moved-from object's data
+        other.numLayers = 0;
+        // Vectors are moved; no need to clear
     }
     return *this;
 }
 
 
+
 // Destructor
 NeuralNetwork::~NeuralNetwork() {
 #ifdef __CUDACC__
-    freeDeviceMemory();
+    if (d_weights || d_biases) {
+        freeDeviceMemory();
+    }
 #endif
+    // The vectors will be automatically destroyed
 }
+
 
 #ifdef __CUDACC__
 // Allocate device memory for weights and biases
@@ -209,6 +175,46 @@ void NeuralNetwork::allocateDeviceMemory() {
         throw std::runtime_error(std::string("CUDA Error (cudaMalloc biases): ") + cudaGetErrorString(err));
     }
 }
+
+
+void NeuralNetwork::initializeHostWeightsAndBiases() {
+    // Clear the vectors before reinitializing
+    host_weights.clear();
+    host_biases.clear();
+
+    // Calculate total number of weights and biases
+    size_t totalWeights = 0;
+    size_t totalBiases = 0;
+    for(int i = 0; i < numLayers; ++i) {
+        totalWeights += static_cast<size_t>(layerSizes[i]) * layerSizes[i+1];
+        totalBiases += layerSizes[i+1];
+    }
+
+    host_weights.reserve(totalWeights);
+    host_biases.reserve(totalBiases);
+
+    // Initialize random number generator
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<> dis(-0.05, 0.05); // Adjust range as needed
+
+    for(int i = 0; i < numLayers; ++i) {
+        int inputSize = layerSizes[i];
+        int outputSize = layerSizes[i+1];
+
+        for(int j = 0; j < inputSize; ++j) {
+            for(int k = 0; k < outputSize; ++k) {
+                host_weights.emplace_back(dis(gen));
+            }
+        }
+
+        for(int k = 0; k < outputSize; ++k) {
+            host_biases.emplace_back(0.0); // Initialize biases to zero
+        }
+    }
+}
+
+
 
 // Copy weights from host to device
 void NeuralNetwork::copyWeightsToDevice() {
@@ -256,7 +262,6 @@ __global__ void forwardKernel(double* weights, double* biases, double* input, do
     }
 }
 
-#ifdef __CUDACC__
 // Forward pass implementation using CUDA
 std::vector<double> NeuralNetwork::forward(const std::vector<double>& input) {
     if(input.size() != static_cast<size_t>(layerSizes[0])) {
@@ -342,7 +347,6 @@ void NeuralNetwork::backpropagate(const std::vector<double>& input, const std::v
     cudaFree(d_target);
     cudaFree(d_output);
 }
-#endif
 
 // Copy all weights and biases to device
 void NeuralNetwork::copyToDevice() {
@@ -364,3 +368,18 @@ void NeuralNetwork::cpuBackpropagate(const std::vector<double>& input, const std
 }
 
 
+void NeuralNetwork::copyWeightsAndBiasesFrom(const NeuralNetwork& other) {
+    // Copy host weights and biases
+    host_weights = other.host_weights;
+    host_biases = other.host_biases;
+
+#ifdef __CUDACC__
+    // Free existing device memory
+    freeDeviceMemory();
+
+    // Allocate and copy to device
+    allocateDeviceMemory();
+    copyWeightsToDevice();
+    copyBiasesToDevice();
+#endif
+}

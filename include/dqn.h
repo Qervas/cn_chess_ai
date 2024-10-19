@@ -15,37 +15,33 @@
 
 class NeuralNetwork {
 public:
-    NeuralNetwork(const std::vector<int>& layerSizes);
-    ~NeuralNetwork();
-
-    // Copy constructor
-    NeuralNetwork(const NeuralNetwork& other);
-
-    // Copy assignment operator
-    NeuralNetwork& operator=(const NeuralNetwork& other);
-
-    // Move constructor and assignment operator 
-	NeuralNetwork(NeuralNetwork&& other) noexcept;
-
-	// Assignment operator
-	NeuralNetwork& operator=(NeuralNetwork&& other) noexcept;
-
-
-    // Forward pass (will use CUDA if available)
-    std::vector<double> forward(const std::vector<double>& input);
-
-    // Backpropagation (will use CUDA if available)
-    void backpropagate(const std::vector<double>& input, const std::vector<double>& target, double learningRate);
 
     // Host-side weights and biases stored as flat vectors
     std::vector<double> host_weights; // Flattened: layer_sizes[i] * layer_sizes[i+1]
     std::vector<double> host_biases;  // Flattened: sum of layer_sizes[i+1]
 
 
+	NeuralNetwork() = delete;
+    NeuralNetwork(const std::vector<int>& layerSizes);
+    NeuralNetwork(const NeuralNetwork& other);
+	NeuralNetwork(NeuralNetwork&& other) noexcept;
+    ~NeuralNetwork();
+    NeuralNetwork& operator=(const NeuralNetwork& other);
+	NeuralNetwork& operator=(NeuralNetwork&& other) noexcept;
+
+
+	
+
+    // Forward pass 
+    std::vector<double> forward(const std::vector<double>& input);
+    // Backpropagation 
+    void backpropagate(const std::vector<double>& input, const std::vector<double>& target, double learningRate);
+
     // Method to copy weights and biases to device (if CUDA is available)
     void copyToDevice();
-
 	void initializeHostWeightsAndBiases();
+    // Method to copy weights and biases from another NeuralNetwork
+    void copyWeightsAndBiasesFrom(const NeuralNetwork& other);
 
 private:
     // Layer information
@@ -82,7 +78,7 @@ public:
     void saveModel(const std::string& filename);
     void loadModel(const std::string& filename);
     void train(const std::vector<double>& state, int action, double reward, const std::vector<double>& nextState, bool done);
-    void syncTargetNetwork();
+
 
 private:
     std::unique_ptr<NeuralNetwork> qNetwork;
