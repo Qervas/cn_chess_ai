@@ -48,7 +48,7 @@ set(CMAKE_BUILD_TYPE Debug)
 find_package(Qt6 COMPONENTS Widgets Multimedia REQUIRED)
 
 set(CMAKE_CUDA_ARCHITECTURES "86")
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -arch=sm_86")
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -G -g -arch=sm_86")
 
 file(GLOB SOURCES "src/*.cpp" "src/*.cu")
 file(GLOB HEADERS "include/*.h" "include/*.cuh")
