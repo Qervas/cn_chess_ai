@@ -322,10 +322,13 @@ bool ChessBoard::isInsideBoard(int row, int col) const {
 
 // Check if a move is valid for the General
 bool ChessBoard::isValidGeneralMove(int fromRow, int fromCol, int toRow, int toCol) const {
-    // Check if the move is within the palace
-    bool isInPalace = (fromRow >= 0 && fromRow <= 2 && fromCol >= 3 && fromCol <= 5) ||
-                      (fromRow >= 7 && fromRow <= 9 && fromCol >= 3 && fromCol <= 5);
-    if (!isInPalace) {
+    // Check if both the starting and ending positions are within the palace
+    bool isFromInPalace = (fromRow >= 0 && fromRow <= 2 && fromCol >= 3 && fromCol <= 5) ||
+                          (fromRow >= 7 && fromRow <= 9 && fromCol >= 3 && fromCol <= 5);
+    bool isToInPalace = (toRow >= 0 && toRow <= 2 && toCol >= 3 && toCol <= 5) ||
+                        (toRow >= 7 && toRow <= 9 && toCol >= 3 && toCol <= 5);
+
+    if (!isFromInPalace || !isToInPalace) {
         return false;
     }
 
@@ -445,3 +448,4 @@ int getPieceScore(PieceType type) {
         default: return 0;
     }
 }
+

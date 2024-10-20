@@ -1,7 +1,11 @@
 #include "mainwindow.h"
 #include "chessai.h"
 #include <QMediaPlayer>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
 #include <QProcess>
+#include <QThread>
+#include <QPushButton>
 
 QMediaPlayer *createMediaPlayer(QObject *parent) {
     QMediaPlayer *player = new QMediaPlayer(parent);
@@ -19,18 +23,6 @@ MainWindow::MainWindow(QWidget *parent)
      currentActionState(ActionState::SelectPiece), currentSelectedButton(nullptr),
      lastAIMoveFrom(-1, -1), lastAIMoveTo(-1, -1)
 {
-    createChessBoard();
-    updateBoardDisplay();
-
-    setMinimumSize(700, 926);
-
-
-    // create status bar
-    redScoreLabel = new QLabel("Red Score: 0", this);
-    blackScoreLabel = new QLabel("Black Score: 0", this);
-    statusBar()->addPermanentWidget(redScoreLabel);
-    statusBar()->addPermanentWidget(blackScoreLabel);
-
     // Initialize sound effects
     selectSound = createMediaPlayer(this);
     moveSound = createMediaPlayer(this);
@@ -68,16 +60,14 @@ MainWindow::MainWindow(QWidget *parent)
 
     setWindowTitle("Chinese Chess");
 
-    logFile.setFileName("ai_game_log.txt");
-    if (!logFile.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Append)) {
-        qDebug() << "Failed to open log file";
-    }
-
     // create AI object
-    chessAI = new ChessAI(&chessBoard, this);
+    chessAI = new ChessAI(&chessBoard);
     connect(chessAI, &ChessAI::gameCompleted, this, &MainWindow::onGameCompleted);
 
     setupMenuBar();
+	setupPages();
+
+	connect(chessAI, &ChessAI::gameCompleted, this, &MainWindow::updateTrainingChart);
 }
 
 MainWindow::~MainWindow() {
@@ -107,6 +97,7 @@ void MainWindow::onGameModeChanged(QAction *action)
     }
 
     resetGame();
+	stackedWidget->setCurrentIndex(0);
 
     switch (currentGameMode) {
         case GameMode::HumanVsHuman:
@@ -176,8 +167,8 @@ void MainWindow::resetGame()
 }
 
 void MainWindow::createChessBoard() {
-    QWidget *centralWidget = new QWidget(this);
-    QGridLayout *gridLayout = new QGridLayout(centralWidget);
+    chessBoardWidget = new QWidget(this);
+    QGridLayout *gridLayout = new QGridLayout(chessBoardWidget);
 
     buttons.resize(10);
     for (int i = 0; i < 10; ++i) {
@@ -193,8 +184,6 @@ void MainWindow::createChessBoard() {
             buttons[i][j] = button;
         }
     }
-
-    setCentralWidget(centralWidget);
 }
 
 void MainWindow::updateBoardDisplay() {
@@ -558,14 +547,46 @@ void MainWindow::setupMenuBar()
 void MainWindow::trainAI()
 {
     bool ok;
-    int episodes = QInputDialog::getInt(this, tr("Train AI"),
-                                        tr("Number of episodes:"), 1000, 1, 1000000, 1, &ok);
+    numGames = QInputDialog::getInt(this, tr("Train AI"),
+                                    tr("Number of games:"), 1000, 1, 1000000, 1, &ok);
     if (ok) {
+        // GUI: Switch to the training page
+        stackedWidget->setCurrentIndex(1);
+        
+        // Logic: Reset training visuals
+        redScoreSeries->clear();
+        blackScoreSeries->clear();
+        trainingProgressBar->setValue(0);
         QMessageBox::information(this, tr("Training Started"),
                                  tr("AI training started. This may take a while."));
-        chessAI->train(episodes);
-        QMessageBox::information(this, tr("Training Completed"),
-                                 tr("AI training completed."));
+        axisX->setMin(0);
+        axisY->setMin(0);
+        axisY->setMax(1000);								
+        axisX->setMax(numGames); // Ensure axisX is set after setting max for Y
+
+        // Create a thread and move ChessAI to it
+        QThread *thread = new QThread;
+        chessAI->moveToThread(thread);
+
+        // Connect thread started signal to ChessAI's train slot
+        connect(thread, &QThread::started, [=]() {
+            chessAI->train(numGames);
+        });
+
+        // Connect ChessAI's signals to MainWindow's slots
+        connect(chessAI, &ChessAI::gameCompleted, this, &MainWindow::updateTrainingChart);
+        connect(chessAI, &ChessAI::trainingFinished, thread, &QThread::quit);
+        connect(chessAI, &ChessAI::trainingFinished, chessAI, &ChessAI::deleteLater);
+        connect(thread, &QThread::finished, thread, &QThread::deleteLater);
+
+        // Start the thread
+        thread->start();
+
+        // Optionally, handle thread finished signal to re-enable buttons
+        connect(thread, &QThread::finished, this, [=]() {
+            // ui->trainButton->setEnabled(true); // Re-enable the train button
+            QMessageBox::information(this, "Training", "Training completed!");
+        });
     }
 }
 
@@ -594,19 +615,12 @@ void MainWindow::saveTrainedAI()
 void MainWindow::runAIGame()
 {
     // Here we only run one AI vs AI game
-    resetGame();
     currentGameMode = GameMode::AIVsAI;
 
     while (!chessBoard.checkGameOver()) {
         makeAIMove();
         updateBoardDisplay();
         QApplication::processEvents();
-        QTimer::singleShot(500, this, [this]() {
-            // Code that needs to be executed after a delay
-            makeAIMove();
-            updateBoardDisplay();
-            checkGameOver();
-        });
     }
 
     checkGameOver();
@@ -619,7 +633,7 @@ void MainWindow::makeAIMove()
         return;
     }
 
-    QPair<QPair<int, int>, QPair<int, int>> move = chessAI->getAIMove(currentPlayer);
+    auto move = chessAI->getAIMove(currentPlayer);
     int fromRow = move.first.first;
     int fromCol = move.first.second;
     int toRow = move.second.first;
@@ -727,4 +741,110 @@ void MainWindow::highlightAIMove(int fromRow, int fromCol, int toRow, int toCol)
     buttons[fromRow][fromCol]->update();
     buttons[toRow][toCol]->update();
 }
+
+void MainWindow::setupTrainingChart()
+{
+    // Initialize the series
+    redScoreSeries = new QLineSeries();
+    redScoreSeries->setName("Red Score");
+
+    blackScoreSeries = new QLineSeries();
+    blackScoreSeries->setName("Black Score");
+
+    // Create the chart
+    QChart *chart = new QChart();
+    chart->addSeries(redScoreSeries);
+    chart->addSeries(blackScoreSeries);
+    chart->setTitle("Training Progress");
+
+    // Create axes
+    axisX = new QValueAxis;
+    axisX->setTitleText("Game Number");
+    axisX->setLabelFormat("%d");
+    axisX->setRange(0, numGames);
+
+    axisY = new QValueAxis;
+    axisY->setTitleText("Score");
+    axisY->setLabelFormat("%d");
+    axisY->setRange(0, 1000); 
+
+    chart->addAxis(axisX, Qt::AlignBottom);
+    chart->addAxis(axisY, Qt::AlignLeft);
+
+    redScoreSeries->attachAxis(axisX);
+    redScoreSeries->attachAxis(axisY);
+
+    blackScoreSeries->attachAxis(axisX);
+    blackScoreSeries->attachAxis(axisY);
+
+    // Create and configure the chart view
+    trainingChartView = new QChartView(chart);
+    trainingChartView->setRenderHint(QPainter::Antialiasing);
+}
+
+void MainWindow::updateTrainingChart(int gameNumber, int redScore, int blackScore)
+{
+    // Update the series with new data points
+    redScoreSeries->append(gameNumber, redScore);
+    blackScoreSeries->append(gameNumber, blackScore);
+	trainingProgressBar->setValue(gameNumber);
+
+    // Optionally, update the axis ranges if necessary
+    if (gameNumber > axisX->max()) {
+        axisX->setMax(gameNumber + numGames * 0.1); // Increase range by 10%
+    }
+
+    if (redScore > axisY->max() || blackScore > axisY->max()) {
+        int newMax = std::max(redScore, blackScore) + 100; 
+        axisY->setMax(newMax);
+    }
+
+    // To improve performance with large datasets, limit the number of points
+    const int maxPoints = 1000;
+    if (redScoreSeries->count() > maxPoints) {
+        redScoreSeries->removePoints(0, redScoreSeries->count() - maxPoints);
+        blackScoreSeries->removePoints(0, blackScoreSeries->count() - maxPoints);
+        axisX->setMin(gameNumber - maxPoints);
+    }
+}
+
+void MainWindow::setupPages(){
+	stackedWidget = new QStackedWidget(this);
+
+	// Initialize chessboardPage
+	chessboardPage = new QWidget();
+	QVBoxLayout *chessLayout = new QVBoxLayout(chessboardPage);
+
+	createChessBoard();
+	updateBoardDisplay();
+	chessLayout->addWidget(chessBoardWidget);
+
+	// Initialize status bar labels
+	redScoreLabel = new QLabel("Red Score: 0", this);
+	blackScoreLabel = new QLabel("Black Score: 0", this);
+	statusBar()->addPermanentWidget(redScoreLabel);
+	statusBar()->addPermanentWidget(blackScoreLabel);
+
+	// Initialize trainingPage
+	trainingPage = new QWidget(); // Proper initialization
+	QVBoxLayout *trainingLayout = new QVBoxLayout(trainingPage);
+	
+	setupTrainingChart();
+	trainingLayout->addWidget(trainingChartView);
+
+	trainingProgressBar = new QProgressBar(this);
+	trainingProgressBar->setRange(0, numGames);
+	trainingProgressBar->setValue(0);
+	trainingProgressBar->setFormat("Training Progress: %p%");
+	trainingLayout->addWidget(trainingProgressBar); // Add progress bar to layout
+
+	// Add pages to stackedWidget
+	stackedWidget->addWidget(chessboardPage);
+	stackedWidget->addWidget(trainingPage);
+
+	// Set stackedWidget as the central widget
+	setCentralWidget(stackedWidget);
+	stackedWidget->setCurrentIndex(0);
+}
+
 

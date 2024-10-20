@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <cstdio> 
 #include <QDebug>
-#include "dqn.cuh"
+#include "dqn.h"
 #include <chrono>
 #include <thread>
 #include <random>

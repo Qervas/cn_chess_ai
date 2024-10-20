@@ -1,8 +1,11 @@
-#include "dqn.cuh"
+#include "dqn.h"
 #include <algorithm>
 #include <stdexcept>
 #include <fstream>
 #include <iostream>
+#include <ctime>
+#include <limits>
+#include <QDebug>
 
 // Constructor
 DQN::DQN(const std::vector<int>& layerSizes, double learningRate, double gamma)
@@ -12,21 +15,45 @@ DQN::DQN(const std::vector<int>& layerSizes, double learningRate, double gamma)
       gamma(gamma)
 {
     updateTargetNetwork();
+    std::srand(static_cast<unsigned int>(std::time(nullptr))); // Seed RNG
+
 }
 
 // Destructor
-DQN::~DQN() {}
+DQN::~DQN() = default;
 
 // Select action using epsilon-greedy strategy
-int DQN::selectAction(const std::vector<double>& state, double epsilon)
+Action DQN::selectAction(const std::vector<double>& state, double epsilon, const std::vector<Action> validActions)
 {
-    if(static_cast<double>(rand()) / RAND_MAX < epsilon) {
-        // Return a random action
-        return rand() % static_cast<int>(state.size()); // Ensure state.size() is non-zero
+    if(validActions.empty()) {
+        throw std::runtime_error("No valid actions available.");
+    }
+
+    double randValue = static_cast<double>(rand()) / RAND_MAX;
+    if(randValue < epsilon) {
+        // Exploration: Return a random valid action
+        int randomIndex = rand() % validActions.size();
+        return validActions[randomIndex];
     } else {
-        // Return the action with the highest Q-value
+        // Exploitation: Choose the best valid action based on Q-values
         std::vector<double> qValues = qNetwork->forward(state);
-        return static_cast<int>(std::distance(qValues.begin(), std::max_element(qValues.begin(), qValues.end())));
+
+        double maxQ = -std::numeric_limits<double>::infinity();
+        Action bestAction = validActions[0];
+
+        for(const auto& action : validActions) {
+            if(action.to >= qValues.size()) {
+                qDebug() << "Warning: Action.to index out of bounds.";
+                continue; // Skip invalid indices
+            }
+            double q = qValues[action.to]; // Assuming action.to uniquely identifies the action
+            if(q > maxQ) {
+                maxQ = q;
+                bestAction = action;
+            }
+        }
+
+        return bestAction;
     }
 }
 
@@ -149,3 +176,4 @@ void DQN::train(const std::vector<double>& state, int action, double reward, con
     // Perform backpropagation to update the network
     qNetwork->backpropagate(state, currentQ, learningRate);
 }
+

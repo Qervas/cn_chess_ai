@@ -8,9 +8,10 @@
 #include <stdexcept>
 #include <fstream>
 #include <iostream>
-
-
+#include <QObject>
 #include <cuda_runtime.h>
+#include "action.h"
+
 // CUDA error checking macro
 inline void checkCudaError(cudaError_t error, const char *file, int line) {
     if (error != cudaSuccess) {
@@ -93,12 +94,13 @@ private:
     void cpuBackpropagate(const std::vector<double>& input, const std::vector<double>& target, double learningRate);
 };
 
-class DQN {
+class DQN : public QObject {
+    Q_OBJECT
 public:
     DQN(const std::vector<int>& layerSizes, double learningRate = 0.001, double gamma = 0.99);
-    ~DQN();
+    virtual ~DQN();
 
-    int selectAction(const std::vector<double>& state, double epsilon);
+    Action selectAction(const std::vector<double>& state, double epsilon, const std::vector<Action> validActions);
     void backpropagate(const std::vector<double>& state, const std::vector<double>& target, double learningRate);
     std::vector<double> getQValues(const std::vector<double>& state);
     void updateTargetNetwork();
@@ -106,14 +108,11 @@ public:
     void loadModel(const std::string& filename);
     void train(const std::vector<double>& state, int action, double reward, const std::vector<double>& nextState, bool done);
 
-
 private:
     std::unique_ptr<NeuralNetwork> qNetwork;
     std::unique_ptr<NeuralNetwork> targetNetwork;
     double learningRate;
     double gamma;
-    // ReplayBuffer and other members remain unchanged
 };
-
 
 #endif // DQN_H

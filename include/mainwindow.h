@@ -24,8 +24,16 @@
 #include <QFileDialog>
 #include <QInputDialog>
 #include <QApplication>
+#include <QMainWindow>
+#include <QtCharts/QChartView>
+#include <QtCharts/QLineSeries>
+#include <QtCharts/QValueAxis>
+#include <QProgressBar>
+#include <QVBoxLayout>
+#include <QStackedWidget>
 #include "chessboard.h"
 #include "chessai.h"
+// using namespace QtCharts;
 
 enum class ActionState {
     SelectPiece,
@@ -36,7 +44,7 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
-    MainWindow(QWidget *parent = nullptr);
+    explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
 
 private slots:
@@ -47,6 +55,8 @@ private slots:
     void loadTrainedAI();
     void saveTrainedAI();
     void runAIGame();
+	void updateTrainingChart(int gameNumber, int redScore, int blackScore);
+
 
 private:
 
@@ -79,8 +89,21 @@ private:
     PieceColor aiColor;
     QPair<int, int> lastAIMoveFrom;
     QPair<int, int> lastAIMoveTo;
+    QChartView *trainingChartView;
+    QLineSeries *redScoreSeries;
+    QLineSeries *blackScoreSeries;
+    QValueAxis *axisX;
+    QValueAxis *axisY;
+	QProgressBar *trainingProgressBar;
+	QStackedWidget *stackedWidget;
+	QWidget *chessboardPage;
+	QWidget *trainingPage;
+	QWidget *chessBoardWidget;
 
     void createChessBoard();
+    void setupMenuBar();
+	void setupTrainingChart();
+	void setupPages();
     void updateBoardDisplay();
     void switchPlayer();
     void checkGameOver();
@@ -95,8 +118,8 @@ private:
     void makeAIMove();
     void highlightAIMove(int fromRow, int fromCol, int toRow, int toCol);
     void updateButtonStyle(QPushButton* button);
-    void setupMenuBar();
     void handleGameOver();
+	
 
 };
 

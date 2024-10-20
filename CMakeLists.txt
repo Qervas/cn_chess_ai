@@ -45,7 +45,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_BUILD_TYPE Debug)
 
-find_package(Qt6 COMPONENTS Widgets Multimedia REQUIRED)
+find_package(Qt6 COMPONENTS Widgets Multimedia Charts REQUIRED)
 
 set(CMAKE_CUDA_ARCHITECTURES "86")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -G -g -arch=sm_86")
@@ -73,7 +73,8 @@ target_include_directories(ChessAI PRIVATE
 target_link_libraries(ChessAI PRIVATE
     Qt6::Widgets
     Qt6::Multimedia
+    Qt6::Charts
+	Qt6::Core
     ${CUDA_LIBRARIES}
     ${CUDNN_LIBRARIES}
 )
-
