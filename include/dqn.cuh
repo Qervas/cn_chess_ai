@@ -45,6 +45,8 @@ public:
     // Host-side weights and biases stored as flat vectors
     std::vector<double> host_weights; // Flattened: layer_sizes[i] * layer_sizes[i+1]
     std::vector<double> host_biases;  // Flattened: sum of layer_sizes[i+1]
+    std::vector<size_t> weightOffsets;
+    std::vector<size_t> biasOffsets;
 
 
 	NeuralNetwork() = delete;

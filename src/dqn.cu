@@ -107,15 +107,42 @@ void NeuralNetwork::initializeHostWeightsAndBiases() {
 
     host_weights.reserve(totalWeights);
     host_biases.reserve(totalBiases);
+	
 
-    for (size_t i = 0; i < layerSizes.size() - 1; ++i) {
-        for (int j = 0; j < layerSizes[i] * layerSizes[i+1]; ++j) {
-            host_weights.push_back(dis(gen));
-        }
-        for (int k = 0; k < layerSizes[i+1]; ++k) {
-            host_biases.push_back(0.0);
-        }
+	for (size_t l = 0; l < numLayers; ++l) {
+	    int inputSize = layerSizes[l];
+	    int outputSize = layerSizes[l+1];
+	    for (int o = 0; o < outputSize; ++o) {
+	        for (int i = 0; i < inputSize; ++i) {
+	            host_weights.push_back(dis(gen));
+	        }
+	    }
+	    for (int o = 0; o < outputSize; ++o) {
+	        host_biases.push_back(0.0);
+	    }
+	}
+
+    weightOffsets.resize(numLayers);
+    biasOffsets.resize(numLayers);
+
+    totalWeights = 0;
+    totalBiases = 0;
+
+    for (size_t l = 0; l < numLayers; ++l) {
+        size_t layerWeightsSize = layerSizes[l] * layerSizes[l+1];
+        size_t layerBiasesSize = layerSizes[l+1];
+
+        weightOffsets[l] = totalWeights;
+        biasOffsets[l] = totalBiases;
+
+        totalWeights += layerWeightsSize;
+        totalBiases += layerBiasesSize;
     }
+
+    // Resize and initialize host_weights and host_biases
+    host_weights.resize(totalWeights);
+    host_biases.resize(totalBiases);
+
 }
 
 
@@ -159,12 +186,14 @@ __global__ void forwardKernel(double* weights, double* biases, double* input, do
     if(idx < outputSize) {
         double sum = 0.0;
         for(int i = 0; i < inputSize; ++i) {
-            sum += input[i] * weights[i * outputSize + idx];
+            size_t weight_idx = idx * inputSize + i;  // Corrected indexing
+            sum += input[i] * weights[weight_idx];
         }
         sum += biases[idx];
         output[idx] = tanh(sum); // Activation function
     }
 }
+
 
 // Forward pass implementation using CUDA
 std::vector<double> NeuralNetwork::forward(const std::vector<double>& input) {
@@ -172,33 +201,60 @@ std::vector<double> NeuralNetwork::forward(const std::vector<double>& input) {
         throw std::invalid_argument("Input size does not match network input layer size.");
     }
 
-    // Use std::vector with custom deleter for CUDA memory
+    // Allocate device memory for activations
     auto cudaDeleter = [](double* ptr) { cudaFree(ptr); };
     std::unique_ptr<double, decltype(cudaDeleter)> d_input(nullptr, cudaDeleter);
     std::unique_ptr<double, decltype(cudaDeleter)> d_output(nullptr, cudaDeleter);
 
-    size_t inputSize = input.size() * sizeof(double);
-    size_t outputSize = layerSizes.back() * sizeof(double);
-
-    double* raw_d_input;
-    double* raw_d_output;
-    CUDA_CHECK(cudaMalloc(&raw_d_input, inputSize));
-    CUDA_CHECK(cudaMalloc(&raw_d_output, outputSize));
-    d_input.reset(raw_d_input);
-    d_output.reset(raw_d_output);
-
     // Copy input to device
-    CUDA_CHECK(cudaMemcpy(d_input.get(), input.data(), inputSize, cudaMemcpyHostToDevice));
+    double* raw_d_input;
+    CUDA_CHECK(cudaMalloc(&raw_d_input, input.size() * sizeof(double)));
+    d_input.reset(raw_d_input);
+    CUDA_CHECK(cudaMemcpy(d_input.get(), input.data(), input.size() * sizeof(double), cudaMemcpyHostToDevice));
 
-    // Launch forward kernel
-    int threadsPerBlock = 256;
-    int blocksPerGrid = (layerSizes.back() + threadsPerBlock - 1) / threadsPerBlock;
-    forwardKernel<<<blocksPerGrid, threadsPerBlock>>>(d_weights.get(), d_biases.get(), d_input.get(), d_output.get(), layerSizes[0], layerSizes.back());
-    CUDA_CHECK(cudaDeviceSynchronize());
+    double* d_current_input = d_input.get();
+    int current_input_size = layerSizes[0];
+
+    for (int layer = 0; layer < numLayers; ++layer) {
+        int current_output_size = layerSizes[layer + 1];
+
+        // Allocate memory for the output of this layer
+        double* raw_d_output;
+        CUDA_CHECK(cudaMalloc(&raw_d_output, current_output_size * sizeof(double)));
+        d_output.reset(raw_d_output);
+
+        // Get pointers to weights and biases for this layer
+        double* d_layer_weights = d_weights.get() + weightOffsets[layer];
+        double* d_layer_biases = d_biases.get() + biasOffsets[layer];
+
+        // Launch the kernel for this layer
+        int threadsPerBlock = 256;
+        int blocksPerGrid = (current_output_size + threadsPerBlock - 1) / threadsPerBlock;
+        forwardKernel<<<blocksPerGrid, threadsPerBlock>>>(
+            d_layer_weights,
+            d_layer_biases,
+            d_current_input,
+            d_output.get(),
+            current_input_size,
+            current_output_size);
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        // Free the input of the previous layer if it's not the original input
+        if (d_current_input != d_input.get()) {
+            CUDA_CHECK(cudaFree(d_current_input));
+        }
+
+        // Prepare for next layer
+        d_current_input = d_output.release(); // Transfer ownership
+        current_input_size = current_output_size;
+    }
 
     // Copy output back to host
-    std::vector<double> host_output(layerSizes.back());
-    CUDA_CHECK(cudaMemcpy(host_output.data(), d_output.get(), outputSize, cudaMemcpyDeviceToHost));
+    std::vector<double> host_output(current_input_size);
+    CUDA_CHECK(cudaMemcpy(host_output.data(), d_current_input, current_input_size * sizeof(double), cudaMemcpyDeviceToHost));
+
+    // Free the last output
+    CUDA_CHECK(cudaFree(d_current_input));
 
     return host_output;
 }
@@ -221,7 +277,7 @@ void NeuralNetwork::backpropagate(const std::vector<double>& input, const std::v
     if(input.size() != static_cast<size_t>(layerSizes[0])) {
         throw std::invalid_argument("Input size does not match network input layer size.");
     }
-    if(target.size() != static_cast<size_t>(layerSizes[1])) {
+    if(target.size() != static_cast<size_t>(layerSizes.back())) {
         throw std::invalid_argument("Target size does not match network output layer size.");
     }
 
