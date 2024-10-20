@@ -272,51 +272,203 @@ __global__ void backpropagateKernel(double* weights, double* biases, double* inp
     }
 }
 
+__global__ void forwardKernel(double* weights, double* biases, double* input, double* output, double* z, int inputSize, int outputSize) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < outputSize) {
+        double sum = biases[idx];
+        for (int i = 0; i < inputSize; ++i) {
+            size_t weight_idx = idx * inputSize + i;
+            sum += input[i] * weights[weight_idx];
+        }
+        z[idx] = sum;
+        output[idx] = tanh(sum); // Activation function
+    }
+}
+
+__global__ void outputLayerDeltaKernel(double* activation, double* target, double* z, double* delta, int size) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size) {
+        double error = activation[idx] - target[idx];
+        double derivative = 1 - tanh(z[idx]) * tanh(z[idx]); // Derivative of tanh
+        delta[idx] = error * derivative;
+    }
+}
+
+__global__ void hiddenLayerDeltaKernel(double* weights_next_layer, double* delta_next_layer, double* z, double* delta, int inputSize, int outputSize) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < outputSize) {
+        double sum = 0.0;
+        for (int i = 0; i < inputSize; ++i) {
+            size_t weight_idx = i * outputSize + idx;
+            sum += weights_next_layer[weight_idx] * delta_next_layer[i];
+        }
+        double derivative = 1 - tanh(z[idx]) * tanh(z[idx]); // Derivative of tanh
+        delta[idx] = sum * derivative;
+    }
+}
+
+__global__ void updateWeightsBiasesKernel(double* weights, double* biases, double* activation_prev_layer, double* delta, double learningRate, int inputSize, int outputSize) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < outputSize) {
+        biases[idx] -= learningRate * delta[idx];
+        for (int i = 0; i < inputSize; ++i) {
+            size_t weight_idx = idx * inputSize + i;
+            weights[weight_idx] -= learningRate * delta[idx] * activation_prev_layer[i];
+        }
+    }
+}
+
+
 // Backpropagation implementation using CUDA
 void NeuralNetwork::backpropagate(const std::vector<double>& input, const std::vector<double>& target, double learningRate) {
-    if(input.size() != static_cast<size_t>(layerSizes[0])) {
+    if (input.size() != static_cast<size_t>(layerSizes[0])) {
         throw std::invalid_argument("Input size does not match network input layer size.");
     }
-    if(target.size() != static_cast<size_t>(layerSizes.back())) {
+    if (target.size() != static_cast<size_t>(layerSizes.back())) {
         throw std::invalid_argument("Target size does not match network output layer size.");
     }
 
-    // Use std::vector with custom deleter for CUDA memory
-    auto cudaDeleter = [](double* ptr) { cudaFree(ptr); };
-    std::unique_ptr<double, decltype(cudaDeleter)> d_input(nullptr, cudaDeleter);
-    std::unique_ptr<double, decltype(cudaDeleter)> d_target(nullptr, cudaDeleter);
-    std::unique_ptr<double, decltype(cudaDeleter)> d_output(nullptr, cudaDeleter);
+    // Forward pass to store activations and z-values
+    std::vector<double*> activations(numLayers + 1);
+    std::vector<double*> zs(numLayers);
 
-    size_t inputSize = input.size() * sizeof(double);
-    size_t outputSize = layerSizes.back() * sizeof(double);
+    // Copy input to device
+    double* d_input;
+    CUDA_CHECK(cudaMalloc(&d_input, input.size() * sizeof(double)));
+    CUDA_CHECK(cudaMemcpy(d_input, input.data(), input.size() * sizeof(double), cudaMemcpyHostToDevice));
+    activations[0] = d_input;
 
-    double* raw_d_input;
-    double* raw_d_target;
-    double* raw_d_output;
-    CUDA_CHECK(cudaMalloc(&raw_d_input, inputSize));
-    CUDA_CHECK(cudaMalloc(&raw_d_target, outputSize));
-    CUDA_CHECK(cudaMalloc(&raw_d_output, outputSize));
-    d_input.reset(raw_d_input);
-    d_target.reset(raw_d_target);
-    d_output.reset(raw_d_output);
+    // Forward pass
+    for (int layer = 0; layer < numLayers; ++layer) {
+        int inputSize = layerSizes[layer];
+        int outputSize = layerSizes[layer + 1];
 
-    // Copy input and target to device
-    CUDA_CHECK(cudaMemcpy(d_input.get(), input.data(), inputSize, cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(d_target.get(), target.data(), outputSize, cudaMemcpyHostToDevice));
+        // Allocate memory for output and z
+        double* d_output;
+        double* d_z;
+        CUDA_CHECK(cudaMalloc(&d_output, outputSize * sizeof(double)));
+        CUDA_CHECK(cudaMalloc(&d_z, outputSize * sizeof(double)));
 
-    // Forward pass to get the output
-    forwardKernel<<<(layerSizes.back() + 255) / 256, 256>>>(d_weights.get(), d_biases.get(), d_input.get(), d_output.get(), layerSizes[0], layerSizes.back());
+        // Get pointers to weights and biases for this layer
+        double* d_layer_weights = d_weights.get() + weightOffsets[layer];
+        double* d_layer_biases = d_biases.get() + biasOffsets[layer];
+
+        // Launch the forward kernel
+        int threadsPerBlock = 256;
+        int blocksPerGrid = (outputSize + threadsPerBlock - 1) / threadsPerBlock;
+        forwardKernel<<<blocksPerGrid, threadsPerBlock>>>(
+            d_layer_weights,
+            d_layer_biases,
+            activations[layer],
+            d_output,
+            d_z,
+            inputSize,
+            outputSize);
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        // Free the input of the previous layer if it's not the original input
+        if (layer > 0) {
+            CUDA_CHECK(cudaFree(activations[layer]));
+        }
+
+        activations[layer + 1] = d_output;
+        zs[layer] = d_z;
+    }
+
+    // Copy target to device
+    double* d_target;
+    CUDA_CHECK(cudaMalloc(&d_target, target.size() * sizeof(double)));
+    CUDA_CHECK(cudaMemcpy(d_target, target.data(), target.size() * sizeof(double), cudaMemcpyHostToDevice));
+
+    // Backward pass
+    std::vector<double*> deltas(numLayers);
+
+    // Compute delta for the output layer
+    int outputLayer = numLayers - 1;
+    int outputSize = layerSizes[outputLayer + 1];
+
+    double* d_delta;
+    CUDA_CHECK(cudaMalloc(&d_delta, outputSize * sizeof(double)));
+
+    int threadsPerBlock = 256;
+    int blocksPerGrid = (outputSize + threadsPerBlock - 1) / threadsPerBlock;
+    outputLayerDeltaKernel<<<blocksPerGrid, threadsPerBlock>>>(
+        activations[outputLayer + 1],
+        d_target,
+        zs[outputLayer],
+        d_delta,
+        outputSize);
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    // Launch backpropagation kernel
-    backpropagateKernel<<<(layerSizes.back() + 255) / 256, 256>>>(d_weights.get(), d_biases.get(), d_input.get(), d_target.get(), d_output.get(), learningRate, layerSizes[0], layerSizes.back());
-    CUDA_CHECK(cudaDeviceSynchronize());
+    deltas[outputLayer] = d_delta;
 
-    // Free device memory
-    d_input.reset();
-    d_target.reset();
-    d_output.reset();
+    // Backpropagate the error
+    for (int layer = outputLayer - 1; layer >= 0; --layer) {
+        int inputSize = layerSizes[layer + 1];
+        int outputSize = layerSizes[layer];
+
+        double* d_next_delta = deltas[layer + 1];
+        double* d_delta;
+        CUDA_CHECK(cudaMalloc(&d_delta, outputSize * sizeof(double)));
+
+        double* d_layer_weights = d_weights.get() + weightOffsets[layer + 1];
+
+        blocksPerGrid = (outputSize + threadsPerBlock - 1) / threadsPerBlock;
+        hiddenLayerDeltaKernel<<<blocksPerGrid, threadsPerBlock>>>(
+            d_layer_weights,
+            d_next_delta,
+            zs[layer],
+            d_delta,
+            inputSize,
+            outputSize);
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        deltas[layer] = d_delta;
+    }
+
+    // Update weights and biases
+    for (int layer = 0; layer < numLayers; ++layer) {
+        int inputSize = layerSizes[layer];
+        int outputSize = layerSizes[layer + 1];
+
+        double* d_layer_weights = d_weights.get() + weightOffsets[layer];
+        double* d_layer_biases = d_biases.get() + biasOffsets[layer];
+
+        blocksPerGrid = (outputSize + threadsPerBlock - 1) / threadsPerBlock;
+        updateWeightsBiasesKernel<<<blocksPerGrid, threadsPerBlock>>>(
+            d_layer_weights,
+            d_layer_biases,
+            activations[layer],
+            deltas[layer],
+            learningRate,
+            inputSize,
+            outputSize);
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
+
+    // Free allocated memory
+
+    // Free activations that haven't been freed yet
+    CUDA_CHECK(cudaFree(activations[0]));               // Free the input activation
+    CUDA_CHECK(cudaFree(activations[numLayers]));       // Free the final output activation
+
+    // Free zs (all layers)
+    for (int layer = 0; layer < numLayers; ++layer) {
+        CUDA_CHECK(cudaFree(zs[layer]));
+    }
+
+    // Free deltas (all layers)
+    for (int layer = 0; layer < numLayers; ++layer) {
+        CUDA_CHECK(cudaFree(deltas[layer]));
+    }
+
+    // Free the target
+    CUDA_CHECK(cudaFree(d_target));
 }
+
+
+
+
 
 void NeuralNetwork::allocateDeviceMemory() {
     d_weights = makeCudaUniquePtr<double>(host_weights.size());
