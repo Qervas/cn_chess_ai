@@ -1,4 +1,4 @@
-#include "dqn.h"
+#include "dqn.cuh"
 #include <algorithm>
 #include <stdexcept>
 #include <fstream>

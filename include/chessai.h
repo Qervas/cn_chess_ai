@@ -8,7 +8,7 @@
 #include <QPair>
 #include <vector>
 #include "chessboard.h"
-#include "dqn.h" // Include DQN definition
+#include "dqn.cuh" 
 
 class ChessAI : public QObject
 {

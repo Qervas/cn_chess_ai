@@ -4,20 +4,11 @@
 #include <algorithm>
 #include <cstdio> 
 #include <QDebug>
-#include "dqn.h"
+#include "dqn.cuh"
 #include <chrono>
 #include <thread>
 #include <random>
-// CUDA error checking macro
-#define CUDA_CHECK_ERROR(call) \
-    do { \
-        cudaError_t err = call; \
-        if(err != cudaSuccess) { \
-            fprintf(stderr, "CUDA Error: %s (err_num=%d) at %s:%d\n", \
-                    cudaGetErrorString(err), err, __FILE__, __LINE__); \
-            exit(EXIT_FAILURE); \
-        } \
-    } while(0)
+
 
 // Parameterized Constructor
 NeuralNetwork::NeuralNetwork(const std::vector<int>& layerSizes_)
@@ -29,10 +20,20 @@ NeuralNetwork::NeuralNetwork(const std::vector<int>& layerSizes_)
 
     numLayers = layerSizes.size() - 1;
 
-    // Initialize host weights and biases with random values
+    // Pre-calculate total sizes
+    size_t totalWeights = 0;
+    size_t totalBiases = 0;
+    for (size_t i = 0; i < layerSizes.size() - 1; ++i) {
+        totalWeights += static_cast<size_t>(layerSizes[i]) * layerSizes[i+1];
+        totalBiases += layerSizes[i+1];
+    }
+
+    // Reserve space for host vectors
+    host_weights.reserve(totalWeights);
+    host_biases.reserve(totalBiases);
+
     initializeHostWeightsAndBiases();
 
-#ifdef __CUDACC__
     d_weights = nullptr;
     d_biases = nullptr;
 
@@ -53,163 +54,66 @@ NeuralNetwork::NeuralNetwork(const std::vector<int>& layerSizes_)
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
     }
-#endif
 }
 
 
-// Copy constructor
 NeuralNetwork::NeuralNetwork(const NeuralNetwork& other)
-    : numLayers(other.numLayers), layerSizes(other.layerSizes),
-      host_weights(other.host_weights), host_biases(other.host_biases),
-      d_weights(nullptr), d_biases(nullptr)
-{
-#ifdef __CUDACC__
+    : layerSizes(other.layerSizes),
+      host_weights(other.host_weights),
+      host_biases(other.host_biases) {
     allocateDeviceMemory();
-    copyWeightsToDevice();
-    copyBiasesToDevice();
-#endif
+    copyToDevice();
 }
 
-// Copy assignment operator
-NeuralNetwork& NeuralNetwork::operator=(const NeuralNetwork& other) {
-    if (this == &other) return *this;
-
-#ifdef __CUDACC__
-    // Free existing device memory
-    freeDeviceMemory();
-#endif
-
-    // Copy layer information and weights/biases
-    numLayers = other.numLayers;
-    layerSizes = other.layerSizes;
-    host_weights = other.host_weights;
-    host_biases = other.host_biases;
-
-#ifdef __CUDACC__
-    // Allocate and copy to device
-    allocateDeviceMemory();
-    copyWeightsToDevice();
-    copyBiasesToDevice();
-#endif
-
-    return *this;
-}
-
-// Move constructor
 NeuralNetwork::NeuralNetwork(NeuralNetwork&& other) noexcept
-    : numLayers(other.numLayers),
-      layerSizes(std::move(other.layerSizes)),
+    : layerSizes(std::move(other.layerSizes)),
       host_weights(std::move(other.host_weights)),
-      host_biases(std::move(other.host_biases))
-{
-#ifdef __CUDACC__
-    d_weights = other.d_weights;
-    d_biases = other.d_biases;
-    other.d_weights = nullptr;
-    other.d_biases = nullptr;
-#endif
-    // Invalidate the moved-from object's data
-    other.numLayers = 0;
-    // Vectors are moved; no need to clear
-}
+      host_biases(std::move(other.host_biases)),
+      d_weights(std::move(other.d_weights)),
+      d_biases(std::move(other.d_biases)) {}
 
-
-
-// Move assignment operator
-NeuralNetwork& NeuralNetwork::operator=(NeuralNetwork&& other) noexcept {
+NeuralNetwork& NeuralNetwork::operator=(const NeuralNetwork& other) {
     if (this != &other) {
-#ifdef __CUDACC__
-        // Free existing device memory
-        freeDeviceMemory();
-
-        // Move device memory pointers
-        d_weights = other.d_weights;
-        d_biases = other.d_biases;
-        other.d_weights = nullptr;
-        other.d_biases = nullptr;
-#endif
-
-        // Move layer information and weights/biases
-        numLayers = other.numLayers;
-        layerSizes = std::move(other.layerSizes);
-        host_weights = std::move(other.host_weights);
-        host_biases = std::move(other.host_biases);
-
-        // Invalidate the moved-from object's data
-        other.numLayers = 0;
-        // Vectors are moved; no need to clear
+        layerSizes = other.layerSizes;
+        host_weights = other.host_weights;
+        host_biases = other.host_biases;
+        allocateDeviceMemory();
+        copyToDevice();
     }
     return *this;
 }
-
 
 
 // Destructor
 NeuralNetwork::~NeuralNetwork() {
-#ifdef __CUDACC__
     if (d_weights || d_biases) {
         freeDeviceMemory();
     }
-#endif
     // The vectors will be automatically destroyed
 }
 
 
-#ifdef __CUDACC__
-// Allocate device memory for weights and biases
-void NeuralNetwork::allocateDeviceMemory() {
-    size_t weightsSize = host_weights.size() * sizeof(double);
-    size_t biasesSize = host_biases.size() * sizeof(double);
-
-    qDebug() << "Allocating device memory for weights:" << weightsSize << "bytes";
-    qDebug() << "Allocating device memory for biases:" << biasesSize << "bytes";
-
-    cudaError_t err = cudaMalloc(&d_weights, weightsSize);
-    if (err != cudaSuccess) {
-        throw std::runtime_error(std::string("CUDA Error (cudaMalloc weights): ") + cudaGetErrorString(err));
-    }
-
-    err = cudaMalloc(&d_biases, biasesSize);
-    if (err != cudaSuccess) {
-        cudaFree(d_weights); // Free the previously allocated memory
-        throw std::runtime_error(std::string("CUDA Error (cudaMalloc biases): ") + cudaGetErrorString(err));
-    }
-}
-
-
 void NeuralNetwork::initializeHostWeightsAndBiases() {
-    // Clear the vectors before reinitializing
-    host_weights.clear();
-    host_biases.clear();
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<> dis(-0.05, 0.05);
 
-    // Calculate total number of weights and biases
     size_t totalWeights = 0;
     size_t totalBiases = 0;
-    for(int i = 0; i < numLayers; ++i) {
-        totalWeights += static_cast<size_t>(layerSizes[i]) * layerSizes[i+1];
+    for (size_t i = 0; i < layerSizes.size() - 1; ++i) {
+        totalWeights += layerSizes[i] * layerSizes[i+1];
         totalBiases += layerSizes[i+1];
     }
 
     host_weights.reserve(totalWeights);
     host_biases.reserve(totalBiases);
 
-    // Initialize random number generator
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_real_distribution<> dis(-0.05, 0.05); // Adjust range as needed
-
-    for(int i = 0; i < numLayers; ++i) {
-        int inputSize = layerSizes[i];
-        int outputSize = layerSizes[i+1];
-
-        for(int j = 0; j < inputSize; ++j) {
-            for(int k = 0; k < outputSize; ++k) {
-                host_weights.emplace_back(dis(gen));
-            }
+    for (size_t i = 0; i < layerSizes.size() - 1; ++i) {
+        for (int j = 0; j < layerSizes[i] * layerSizes[i+1]; ++j) {
+            host_weights.push_back(dis(gen));
         }
-
-        for(int k = 0; k < outputSize; ++k) {
-            host_biases.emplace_back(0.0); // Initialize biases to zero
+        for (int k = 0; k < layerSizes[i+1]; ++k) {
+            host_biases.push_back(0.0);
         }
     }
 }
@@ -223,7 +127,7 @@ void NeuralNetwork::copyWeightsToDevice() {
     }
 
     size_t size = host_weights.size() * sizeof(double);
-    CUDA_CHECK_ERROR(cudaMemcpy(d_weights, host_weights.data(), size, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_weights.get(), host_weights.data(), size, cudaMemcpyHostToDevice));
 }
 
 // Copy biases from host to device
@@ -233,16 +137,16 @@ void NeuralNetwork::copyBiasesToDevice() {
     }
 
     size_t size = host_biases.size() * sizeof(double);
-    CUDA_CHECK_ERROR(cudaMemcpy(d_biases, host_biases.data(), size, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_biases.get(), host_biases.data(), size, cudaMemcpyHostToDevice));
 }
 // Free device memory
 void NeuralNetwork::freeDeviceMemory() {
     if(d_weights) {
-        cudaFree(d_weights);
+        d_weights.reset();
         d_weights = nullptr;
     }
     if(d_biases) {
-        cudaFree(d_biases);
+        d_biases.reset();
         d_biases = nullptr;
     }
 }
@@ -268,31 +172,33 @@ std::vector<double> NeuralNetwork::forward(const std::vector<double>& input) {
         throw std::invalid_argument("Input size does not match network input layer size.");
     }
 
-    // Allocate device memory for input and output
-    double* d_input = nullptr;
-    double* d_output = nullptr;
-    size_t inputSize = input.size() * sizeof(double);
-    size_t outputSize = layerSizes[1] * sizeof(double);
+    // Use std::vector with custom deleter for CUDA memory
+    auto cudaDeleter = [](double* ptr) { cudaFree(ptr); };
+    std::unique_ptr<double, decltype(cudaDeleter)> d_input(nullptr, cudaDeleter);
+    std::unique_ptr<double, decltype(cudaDeleter)> d_output(nullptr, cudaDeleter);
 
-    CUDA_CHECK_ERROR(cudaMalloc(&d_input, inputSize));
-    CUDA_CHECK_ERROR(cudaMalloc(&d_output, outputSize));
+    size_t inputSize = input.size() * sizeof(double);
+    size_t outputSize = layerSizes.back() * sizeof(double);
+
+    double* raw_d_input;
+    double* raw_d_output;
+    CUDA_CHECK(cudaMalloc(&raw_d_input, inputSize));
+    CUDA_CHECK(cudaMalloc(&raw_d_output, outputSize));
+    d_input.reset(raw_d_input);
+    d_output.reset(raw_d_output);
 
     // Copy input to device
-    CUDA_CHECK_ERROR(cudaMemcpy(d_input, input.data(), inputSize, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_input.get(), input.data(), inputSize, cudaMemcpyHostToDevice));
 
     // Launch forward kernel
     int threadsPerBlock = 256;
-    int blocksPerGrid = (layerSizes[1] + threadsPerBlock - 1) / threadsPerBlock;
-    forwardKernel<<<blocksPerGrid, threadsPerBlock>>>(d_weights, d_biases, d_input, d_output, layerSizes[0], layerSizes[1]);
-    CUDA_CHECK_ERROR(cudaDeviceSynchronize());
+    int blocksPerGrid = (layerSizes.back() + threadsPerBlock - 1) / threadsPerBlock;
+    forwardKernel<<<blocksPerGrid, threadsPerBlock>>>(d_weights.get(), d_biases.get(), d_input.get(), d_output.get(), layerSizes[0], layerSizes.back());
+    CUDA_CHECK(cudaDeviceSynchronize());
 
     // Copy output back to host
-    std::vector<double> host_output(layerSizes[1]);
-    CUDA_CHECK_ERROR(cudaMemcpy(host_output.data(), d_output, outputSize, cudaMemcpyDeviceToHost));
-
-    // Free device memory for input and output
-    cudaFree(d_input);
-    cudaFree(d_output);
+    std::vector<double> host_output(layerSizes.back());
+    CUDA_CHECK(cudaMemcpy(host_output.data(), d_output.get(), outputSize, cudaMemcpyDeviceToHost));
 
     return host_output;
 }
@@ -319,41 +225,63 @@ void NeuralNetwork::backpropagate(const std::vector<double>& input, const std::v
         throw std::invalid_argument("Target size does not match network output layer size.");
     }
 
-    // Allocate device memory for input, target, and output
-    double* d_input = nullptr;
-    double* d_target = nullptr;
-    double* d_output = nullptr;
-    size_t inputSize = input.size() * sizeof(double);
-    size_t outputSize = layerSizes[1] * sizeof(double);
+    // Use std::vector with custom deleter for CUDA memory
+    auto cudaDeleter = [](double* ptr) { cudaFree(ptr); };
+    std::unique_ptr<double, decltype(cudaDeleter)> d_input(nullptr, cudaDeleter);
+    std::unique_ptr<double, decltype(cudaDeleter)> d_target(nullptr, cudaDeleter);
+    std::unique_ptr<double, decltype(cudaDeleter)> d_output(nullptr, cudaDeleter);
 
-    CUDA_CHECK_ERROR(cudaMalloc(&d_input, inputSize));
-    CUDA_CHECK_ERROR(cudaMalloc(&d_target, outputSize));
-    CUDA_CHECK_ERROR(cudaMalloc(&d_output, outputSize));
+    size_t inputSize = input.size() * sizeof(double);
+    size_t outputSize = layerSizes.back() * sizeof(double);
+
+    double* raw_d_input;
+    double* raw_d_target;
+    double* raw_d_output;
+    CUDA_CHECK(cudaMalloc(&raw_d_input, inputSize));
+    CUDA_CHECK(cudaMalloc(&raw_d_target, outputSize));
+    CUDA_CHECK(cudaMalloc(&raw_d_output, outputSize));
+    d_input.reset(raw_d_input);
+    d_target.reset(raw_d_target);
+    d_output.reset(raw_d_output);
 
     // Copy input and target to device
-    CUDA_CHECK_ERROR(cudaMemcpy(d_input, input.data(), inputSize, cudaMemcpyHostToDevice));
-    CUDA_CHECK_ERROR(cudaMemcpy(d_target, target.data(), outputSize, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_input.get(), input.data(), inputSize, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_target.get(), target.data(), outputSize, cudaMemcpyHostToDevice));
 
     // Forward pass to get the output
-    forwardKernel<<<(layerSizes[1] + 255) / 256, 256>>>(d_weights, d_biases, d_input, d_output, layerSizes[0], layerSizes[1]);
-    CUDA_CHECK_ERROR(cudaDeviceSynchronize());
+    forwardKernel<<<(layerSizes.back() + 255) / 256, 256>>>(d_weights.get(), d_biases.get(), d_input.get(), d_output.get(), layerSizes[0], layerSizes.back());
+    CUDA_CHECK(cudaDeviceSynchronize());
 
     // Launch backpropagation kernel
-    backpropagateKernel<<<(layerSizes[1] + 255) / 256, 256>>>(d_weights, d_biases, d_input, d_target, d_output, learningRate, layerSizes[0], layerSizes[1]);
-    CUDA_CHECK_ERROR(cudaDeviceSynchronize());
+    backpropagateKernel<<<(layerSizes.back() + 255) / 256, 256>>>(d_weights.get(), d_biases.get(), d_input.get(), d_target.get(), d_output.get(), learningRate, layerSizes[0], layerSizes.back());
+    CUDA_CHECK(cudaDeviceSynchronize());
 
     // Free device memory
-    cudaFree(d_input);
-    cudaFree(d_target);
-    cudaFree(d_output);
+    d_input.reset();
+    d_target.reset();
+    d_output.reset();
 }
 
-// Copy all weights and biases to device
-void NeuralNetwork::copyToDevice() {
-    copyWeightsToDevice();
-    copyBiasesToDevice();
+void NeuralNetwork::allocateDeviceMemory() {
+    d_weights = makeCudaUniquePtr<double>(host_weights.size());
+    d_biases = makeCudaUniquePtr<double>(host_biases.size());
 }
-#endif
+
+
+
+void NeuralNetwork::copyToDevice() {
+    CUDA_CHECK(cudaMemcpy(d_weights.get(), host_weights.data(), 
+                          host_weights.size() * sizeof(double), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_biases.get(), host_biases.data(), 
+                          host_biases.size() * sizeof(double), cudaMemcpyHostToDevice));
+}
+
+void NeuralNetwork::copyFromDevice() {
+    CUDA_CHECK(cudaMemcpy(host_weights.data(), d_weights.get(), 
+                          host_weights.size() * sizeof(double), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(host_biases.data(), d_biases.get(), 
+                          host_biases.size() * sizeof(double), cudaMemcpyDeviceToHost));
+}
 
 // CPU implementations (if CUDA is not available)
 std::vector<double> NeuralNetwork::cpuForward(const std::vector<double>& input) {
@@ -369,17 +297,14 @@ void NeuralNetwork::cpuBackpropagate(const std::vector<double>& input, const std
 
 
 void NeuralNetwork::copyWeightsAndBiasesFrom(const NeuralNetwork& other) {
-    // Copy host weights and biases
-    host_weights = other.host_weights;
+    host_weights = other.host_weights;  // This will use move semantics if possible
     host_biases = other.host_biases;
 
-#ifdef __CUDACC__
-    // Free existing device memory
     freeDeviceMemory();
-
-    // Allocate and copy to device
     allocateDeviceMemory();
     copyWeightsToDevice();
     copyBiasesToDevice();
-#endif
 }
+
+
+

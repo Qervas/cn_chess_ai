@@ -9,10 +9,36 @@
 #include <fstream>
 #include <iostream>
 
-#ifdef __CUDACC__
-#include <cuda_runtime.h>
-#endif
 
+#include <cuda_runtime.h>
+// CUDA error checking macro
+inline void checkCudaError(cudaError_t error, const char *file, int line) {
+    if (error != cudaSuccess) {
+        throw std::runtime_error(std::string("CUDA error: ") + 
+                                 cudaGetErrorString(error) + 
+                                 " at " + file + ":" + std::to_string(line));
+    }
+}
+
+#define CUDA_CHECK(call) checkCudaError(call, __FILE__, __LINE__)
+
+// Custom deleter for CUDA memory
+struct CudaDeleter {
+    void operator()(void* ptr) const {
+        cudaFree(ptr);
+    }
+};
+
+// Wrapper for CUDA memory
+template<typename T>
+using CudaUniquePtr = std::unique_ptr<T, CudaDeleter>;
+
+template<typename T>
+CudaUniquePtr<T> makeCudaUniquePtr(size_t size) {
+    T* ptr;
+    CUDA_CHECK(cudaMalloc(&ptr, size * sizeof(T)));
+    return CudaUniquePtr<T>(ptr);
+}
 class NeuralNetwork {
 public:
 
@@ -39,6 +65,7 @@ public:
 
     // Method to copy weights and biases to device (if CUDA is available)
     void copyToDevice();
+	void copyFromDevice();
 	void initializeHostWeightsAndBiases();
     // Method to copy weights and biases from another NeuralNetwork
     void copyWeightsAndBiasesFrom(const NeuralNetwork& other);
@@ -49,17 +76,15 @@ private:
 public:
     std::vector<int> layerSizes;
 private:
-#ifdef __CUDACC__
     // Device-side pointers for weights and biases (only when CUDA is available)
-    double* d_weights;
-    double* d_biases;
+    CudaUniquePtr<double> d_weights;
+    CudaUniquePtr<double> d_biases;
 
     // CUDA memory management
     void allocateDeviceMemory();
     void copyWeightsToDevice();
     void copyBiasesToDevice();
     void freeDeviceMemory();
-#endif
 
     // CPU implementations (can be used as fallback or when CUDA is not available)
     std::vector<double> cpuForward(const std::vector<double>& input);
@@ -87,5 +112,6 @@ private:
     double gamma;
     // ReplayBuffer and other members remain unchanged
 };
+
 
 #endif // DQN_H

@@ -48,12 +48,12 @@ MainWindow::MainWindow(QWidget *parent)
         QLabel {
             font-weight: bold;
             font-size: 14pt;
-            color: #ff0000; /* Red color for visibility */
+            color: #ff0000; 
         }
         QStatusBar {
             font-weight: bold;
             font-size: 14pt;
-            color: #ff0000; /* Red color for visibility */
+            color: #ff0000; 
         }
         QPushButton {
             background-color: #f0d9b5;
