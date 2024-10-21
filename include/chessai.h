@@ -25,6 +25,7 @@ public:
     void loadModel(const QString& filename);
 	void onGameCompleted(int gameNumber, int redScore, int blackScore);
 	void initializeDQN();
+	bool isDQNInitialized() const{ return dqn != nullptr;}
 
 public slots:
     void train(int numEpisodes);

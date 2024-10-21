@@ -87,12 +87,70 @@ void MainWindow::onGameModeChanged(QAction *action)
         currentGameMode = GameMode::HumanVsHuman;
     } else if (action->text() == tr("Human vs AI")) {
         currentGameMode = GameMode::HumanVsAI;
+
+        // Prompt user to select a model
+        QString filename = QFileDialog::getOpenFileName(this, tr("Select AI Model"),
+                                                        "", tr("AI Model Files (*.bin)"));
+        if (filename.isEmpty()) {
+            // User canceled, switch back to Human vs Human mode
+            QMessageBox::warning(this, tr("Model Not Selected"),
+                                 tr("AI model not selected. Switching to Human vs Human mode."));
+            QAction *humanVsHumanAction = menuBar()->findChild<QAction*>(tr("Human vs Human"));
+            if (humanVsHumanAction) {
+                humanVsHumanAction->setChecked(true);
+            }
+            currentGameMode = GameMode::HumanVsHuman;
+            resetGame();
+            stackedWidget->setCurrentIndex(0);
+            return;
+        }
+
+        // Initialize ChessAI's DQN in the main thread and load the model
+        if (!chessAI) {
+            chessAI = new ChessAI(&chessBoard);
+        }
+        chessAI->initializeDQN();
+        chessAI->loadModel(filename);
+
+        QMessageBox::information(this, tr("Model Loaded"),
+                                 tr("AI model loaded successfully."));
+
     } else if (action->text() == tr("AI vs AI")) {
         currentGameMode = GameMode::AIVsAI;
+
+        // Prompt user to select a model
+        QString filename = QFileDialog::getOpenFileName(this, tr("Select AI Model"),
+                                                        "", tr("AI Model Files (*.bin)"));
+        if (filename.isEmpty()) {
+            // User canceled, switch back to Human vs Human mode
+            QMessageBox::warning(this, tr("Model Not Selected"),
+                                 tr("AI model not selected. Switching to Human vs Human mode."));
+            QAction *humanVsHumanAction = menuBar()->findChild<QAction*>(tr("Human vs Human"));
+            if (humanVsHumanAction) {
+                humanVsHumanAction->setChecked(true);
+            }
+            currentGameMode = GameMode::HumanVsHuman;
+            resetGame();
+            stackedWidget->setCurrentIndex(0);
+            return;
+        }
+
+        // Initialize ChessAI's DQN in the main thread and load the model
+        if (!chessAI) {
+            chessAI = new ChessAI(&chessBoard);
+        }
+        chessAI->initializeDQN();
+        chessAI->loadModel(filename);
+
+        QMessageBox::information(this, tr("Model Loaded"),
+                                 tr("AI model loaded successfully."));
+
+        // Start AI vs AI game
+        runAIGame();
     }
 
     resetGame();
-	stackedWidget->setCurrentIndex(0);
+    stackedWidget->setCurrentIndex(0);
 
     switch (currentGameMode) {
         case GameMode::HumanVsHuman:
@@ -103,10 +161,10 @@ void MainWindow::onGameModeChanged(QAction *action)
             break;
         case GameMode::AIVsAI:
             statusBar()->showMessage(tr("Mode: AI vs AI"));
-            runAIGame();
             break;
     }
 }
+
 
 void MainWindow::resetGame()
 {
@@ -526,12 +584,10 @@ void MainWindow::setupMenuBar()
     // AI Menu
     trainAIAction = aiMenu->addAction(tr("train AI"));
     loadAIAction = aiMenu->addAction(tr("load trained AI"));
-    saveAIAction = aiMenu->addAction(tr("save trained AI"));
     runAIGameAction = aiMenu->addAction(tr("Run AI Battle"));
 
     connect(trainAIAction, &QAction::triggered, this, &MainWindow::trainAI);
     connect(loadAIAction, &QAction::triggered, this, &MainWindow::loadTrainedAI);
-    connect(saveAIAction, &QAction::triggered, this, &MainWindow::saveTrainedAI);
     connect(runAIGameAction, &QAction::triggered, this, &MainWindow::runAIGame);
 
     // default human vs human mode
@@ -590,15 +646,27 @@ void MainWindow::saveTrainedAI()
     QString filename = QFileDialog::getSaveFileName(this, tr("Save AI Model"),
                                                     "", tr("AI Model Files (*.bin)"));
     if (!filename.isEmpty()) {
-        chessAI->saveModel(filename);
-        QMessageBox::information(this, tr("Model Saved"),
-                                 tr("AI model saved successfully."));
+        if (chessAI && chessAI->isDQNInitialized()) {
+            chessAI->saveModel(filename);
+            QMessageBox::information(this, tr("Model Saved"),
+                                     tr("AI model saved successfully."));
+        } else {
+            QMessageBox::warning(this, tr("Save Failed"),
+                                 tr("AI model is not initialized. Please train or load a model first."));
+        }
     }
 }
 
 void MainWindow::runAIGame()
 {
-    // Here we only run one AI vs AI game
+    // Ensure that dqn is initialized and model is loaded
+    if (!chessAI || !chessAI->isDQNInitialized()) {
+        QMessageBox::warning(this, tr("AI Not Ready"),
+                             tr("AI model is not loaded. Please train or load a model first."));
+        return;
+    }
+
+    // AI vs AI game
     currentGameMode = GameMode::AIVsAI;
 
     while (!chessBoard.checkGameOver()) {
@@ -622,6 +690,11 @@ void MainWindow::makeAIMove()
     int fromCol = move.first.second;
     int toRow = move.second.first;
     int toCol = move.second.second;
+
+    if (fromRow == -1) {// No valid move, handle game over
+        handleGameOver();
+        return;
+    }
 
     // execute AI's move
     ChessPiece capturedPiece = chessBoard.movePiece(fromRow, fromCol, toRow, toCol);
