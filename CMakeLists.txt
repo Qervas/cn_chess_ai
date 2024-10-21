@@ -28,7 +28,7 @@ if(WIN32)
     # Specify the exact name of the cuDNN library file
     # Adjust the name based on your installation
     find_library(CUDNN_LIBRARY 
-        NAMES cudnn cudnn64_8 cudnn.lib cudnn64_9.lib
+        NAMES cudnn cudnn64_9 cudnn.lib cudnn64_9.lib
         HINTS "${CUDNN_LIB_DIR}"
         PATH_SUFFIXES lib x64
         REQUIRED
@@ -90,6 +90,11 @@ add_executable(ChessAI
     ${HEADERS}
     ${RESOURCES}
 )
+
+if (MSVC)
+	target_compile_options(ChessAI PRIVATE /Zc:__cplusplus)
+endif()
+
 
 # CUDA Separable Compilation
 set_target_properties(ChessAI PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
