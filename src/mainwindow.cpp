@@ -615,7 +615,9 @@ void MainWindow::trainAI()
         // Logic: Reset training visuals
         redScoreSeries->clear();
         blackScoreSeries->clear();
+        trainingProgressBar->setRange(0, numGames);
         trainingProgressBar->setValue(0);
+        trainingProgressBar->setFormat("Training Progress: %p%");
         QMessageBox::information(this, tr("Training Started"),
                                  tr("AI training started. This may take a while."));
         axisX->setMin(0);
@@ -825,6 +827,7 @@ void MainWindow::updateTrainingChart(int gameNumber, int redScore, int blackScor
 	    redScoreSeries->append(gameNumber, redScore);
 	    blackScoreSeries->append(gameNumber, blackScore);
 		trainingProgressBar->setValue(gameNumber);
+		trainingProgressBar->setFormat(QString("Training Progress: %1/%2 (%p%)").arg(gameNumber).arg(numGames));
 
 	    if (gameNumber > axisX->max()) {
 	        axisX->setMax(gameNumber + numGames * 0.1); // Increase range by 10%
@@ -905,3 +908,5 @@ void MainWindow::loadTrainedAI(){
                                  tr("AI model loaded successfully."));
     }	
 }
+
+
