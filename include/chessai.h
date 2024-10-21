@@ -42,7 +42,7 @@ private:
     std::vector<double> getStateRepresentation(); 
     Action actionToMove(const Action& action);
     Action moveToAction(int fromRow, int fromCol, int toRow, int toCol);
-    int evaluateBoard(PieceColor color);
+    int evaluateBoard(PieceColor color, int moveCount);
     
     // Learning parameters
     double learningRate = 0.001;

@@ -84,13 +84,16 @@ QPair<QPair<int, int>, QPair<int, int>> ChessAI::getAIMove(PieceColor color)
 
 void ChessAI::train(int numEpisodes)
 {
-	initializeDQN();
+    initializeDQN();
+    int maxMovesPerGame = 200; // Set a reasonable move limit
     for (int episode = 0; episode < numEpisodes; ++episode) {
         board->reset();
         PieceColor currentPlayer = PieceColor::Red;
         std::vector<double> state = getStateRepresentation();
 
-        while (!board->checkGameOver()) {
+        int moveCount = 0;
+
+        while (!board->checkGameOver() && moveCount < maxMovesPerGame) {
             // Gather all valid actions for the current state and player
             std::vector<Action> validActions = getAllValidActions(currentPlayer);
 
@@ -109,11 +112,12 @@ void ChessAI::train(int numEpisodes)
 
             board->movePiece(fromRow, fromCol, toRow, toCol);
 
-            double reward = evaluateBoard(currentPlayer);
+			moveCount = board->getMoveCount();
+            double reward = evaluateBoard(currentPlayer, moveCount);
 
             std::vector<double> nextState = getStateRepresentation();
-            bool done = board->checkGameOver();
-           
+            bool done = board->checkGameOver() || (moveCount + 1 >= maxMovesPerGame);
+
             // Compute target Q-values
             std::vector<double> targetQ = dqn->getQValues(state);
             if (done) {
@@ -133,27 +137,38 @@ void ChessAI::train(int numEpisodes)
             currentPlayer = (currentPlayer == PieceColor::Red) ? PieceColor::Black : PieceColor::Red;
 
             // Update target network every certain number of steps
-            if (board->getMoveCount() % 100 == 0) {
+            if (moveCount % 100 == 0) {
                 dqn->updateTargetNetwork();
             }
         }
 
+        // Check if the game ended due to exceeding maximum moves
+        bool drawDueToMaxMoves = !board->checkGameOver() && (moveCount >= maxMovesPerGame);
+
         // Game over, emit signal
-        PieceColor winner = board->getWinner();
+        PieceColor winner;
+        if (drawDueToMaxMoves) {
+            winner = PieceColor::None; // Indicate a draw
+			// reward = -50;
+            qDebug() << "Game" << episode + 1 << "completed. Result: Draw due to maximum moves.";
+        } else {
+            winner = board->getWinner();
+            qDebug() << "Game" << episode + 1 << "completed. Winner:"
+                     << (winner == PieceColor::Red ? "Red" : "Black")
+                     << "Red score:" << board->getRedScore()
+                     << "Black score:" << board->getBlackScore();
+        }
+
         emit gameCompleted(episode + 1, board->getRedScore(), board->getBlackScore());
 
         // Save model every certain number of games
         if ((episode + 1) % 100 == 0) {
             saveModel(QString("model_after_%1_games.bin").arg(episode + 1));
         }
-
-        qDebug() << "Game" << episode + 1 << "completed. Winner:" 
-                 << (winner == PieceColor::Red ? "Red" : "Black")
-                 << "Red score:" << board->getRedScore() 
-                 << "Black score:" << board->getBlackScore();
     }
     emit trainingFinished();
 }
+
 
 void ChessAI::saveModel(const QString& filename)
 {
@@ -202,7 +217,8 @@ void ChessAI::startSelfPlay(int numGames)
             ChessPiece capturedPiece = board->movePiece(fromRow, fromCol, toRow, toCol);
 
             // Calculate reward
-            double reward = evaluateBoard(currentPlayer);
+
+            double reward = evaluateBoard(currentPlayer, board->getMoveCount());
 
             // Get new state
             std::vector<double> nextState = getStateRepresentation();
@@ -292,7 +308,7 @@ Action ChessAI::moveToAction(int fromRow, int fromCol, int toRow, int toCol)
     return Action{fromSquare, toSquare};
 }
 
-int ChessAI::evaluateBoard(PieceColor color)
+int ChessAI::evaluateBoard(PieceColor color, int moveCount)
 {
     int score = 0;
     for (int row = 0; row < 10; ++row) {
@@ -323,6 +339,8 @@ int ChessAI::evaluateBoard(PieceColor color)
             }
         }
     }
+    // Introduce a small penalty per move
+    score -= moveCount * 0.1; // Adjust the factor as needed
     return score;
 }
 
