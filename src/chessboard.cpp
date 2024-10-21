@@ -287,6 +287,10 @@ bool ChessBoard::checkGameOver() const {
     bool redGeneralAlive = false;
     bool blackGeneralAlive = false;
 
+	if(moveCount >= maxMovePerGame){
+		return true;
+	}
+
     for (int i = 0; i < ROWS * COLS; ++i) {
         const ChessPiece& piece = board[i];
         if (piece.type == PieceType::General) {

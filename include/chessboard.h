@@ -60,9 +60,8 @@ private:
     static constexpr int COLS = 9;
     QVector<ChessPiece> board; // Flat vector representing the board
     int moveCount{0};
+	int maxMovePerGame{200};
     PieceColor currentPlayer{PieceColor::Red};
-    bool isGeneralAlive(PieceColor color) const;
-
     bool isInRedPalace(int row, int col) const {
         return row >= 0 && row <= 2 && col >= 3 && col <= 5;
     }

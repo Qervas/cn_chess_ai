@@ -25,6 +25,7 @@ public:
     void loadModel(const QString& filename);
 	void onGameCompleted(int gameNumber, int redScore, int blackScore);
 	void initializeDQN();
+	bool isDQNInitialized() const{ return dqn != nullptr;}
 
 public slots:
     void train(int numEpisodes);
@@ -41,7 +42,7 @@ private:
     std::vector<double> getStateRepresentation(); 
     Action actionToMove(const Action& action);
     Action moveToAction(int fromRow, int fromCol, int toRow, int toCol);
-    int evaluateBoard(PieceColor color);
+    int evaluateBoard(PieceColor color, int moveCount);
     
     // Learning parameters
     double learningRate = 0.001;
