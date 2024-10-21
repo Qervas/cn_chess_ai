@@ -3,8 +3,8 @@
 
 #include <QVector>
 #include <QString>
-#include <QMap>
 #include <QPair>
+
 enum class PieceType {
     Empty, General, Advisor, Elephant, Horse, Chariot, Cannon, Soldier
 };
@@ -30,17 +30,6 @@ enum class PieceScore {
     Soldier = 10
 };
 
-
-struct Position {
-    int row;
-    int col;
-    Position(int r = 0, int c = 0) : row(r), col(c) {}
-    bool operator<(const Position& other) const {
-        if (row != other.row) return row < other.row;
-        return col < other.col;
-    }
-};
-
 class ChessBoard {
 public:
     ChessBoard();
@@ -53,16 +42,10 @@ public:
     int getBlackScore() const;
     bool checkGameOver() const;
     PieceColor getWinner() const;
-    PieceColor getCurrentPlayer() const{return currentPlayer;}
+    PieceColor getCurrentPlayer() const { return currentPlayer; }
     int getMoveCount() const { return moveCount; }
     QVector<QPair<int, int>> getValidMoves(int row, int col) const;
 
-
-
-private:
-    QMap<Position, ChessPiece> board;
-    int moveCount{0};
-    PieceColor currentPlayer{PieceColor::Red};
     bool isInsideBoard(int row, int col) const;
     bool isValidGeneralMove(int fromRow, int fromCol, int toRow, int toCol) const;
     bool isValidAdvisorMove(int fromRow, int fromCol, int toRow, int toCol) const;
@@ -71,6 +54,13 @@ private:
     bool isValidChariotMove(int fromRow, int fromCol, int toRow, int toCol) const;
     bool isValidCannonMove(int fromRow, int fromCol, int toRow, int toCol) const;
     bool isValidSoldierMove(int fromRow, int fromCol, int toRow, int toCol) const;
+
+private:
+    static constexpr int ROWS = 10;
+    static constexpr int COLS = 9;
+    QVector<ChessPiece> board; // Flat vector representing the board
+    int moveCount{0};
+    PieceColor currentPlayer{PieceColor::Red};
     bool isGeneralAlive(PieceColor color) const;
 
     bool isInRedPalace(int row, int col) const {
@@ -87,9 +77,17 @@ private:
 
     int redScore;
     int blackScore;
+
+	void generateGeneralMoves(int, int, QVector<QPair<int, int>>&) const;
+	void generateAdvisorMoves(int, int, QVector<QPair<int, int>>&) const;
+	void generateElephantMoves(int, int, QVector<QPair<int, int>>&) const;
+	void generateChariotMoves(int, int, QVector<QPair<int, int>>&) const;
+	void generateCannonMoves(int, int, QVector<QPair<int, int>>&) const;
+	void generateHorseMoves(int, int, QVector<QPair<int, int>>&) const;
+	void generateSoldierMoves(int, int, QVector<QPair<int, int>>&) const;
+
 };
 
 int getPieceScore(PieceType type);
-
 
 #endif // CHESSBOARD_H

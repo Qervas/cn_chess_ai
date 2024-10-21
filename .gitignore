@@ -47,3 +47,4 @@ qrc_*.cpp
 *.ncb
 *.sln
 *.vcxproj*
+*.txt

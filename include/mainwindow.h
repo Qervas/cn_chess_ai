@@ -24,8 +24,16 @@
 #include <QFileDialog>
 #include <QInputDialog>
 #include <QApplication>
+#include <QMainWindow>
+#include <QtCharts/QChartView>
+#include <QtCharts/QLineSeries>
+#include <QtCharts/QValueAxis>
+#include <QProgressBar>
+#include <QVBoxLayout>
+#include <QStackedWidget>
 #include "chessboard.h"
 #include "chessai.h"
+// using namespace QtCharts;
 
 enum class ActionState {
     SelectPiece,
@@ -36,17 +44,18 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
-    MainWindow(QWidget *parent = nullptr);
+    explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
 
 private slots:
     void onButtonClicked();
     void onGameModeChanged(QAction *action);
-    void onGameCompleted(int gameNumber, int redScore, int blackScore);
     void trainAI();
     void loadTrainedAI();
     void saveTrainedAI();
     void runAIGame();
+	void updateTrainingChart(int gameNumber, int redScore, int blackScore);
+
 
 private:
 
@@ -75,12 +84,24 @@ private:
     int numGames{1000};
     enum class GameMode { HumanVsHuman, AIVsAI, HumanVsAI };
     GameMode currentGameMode;
-    QFile logFile;
     PieceColor aiColor;
     QPair<int, int> lastAIMoveFrom;
     QPair<int, int> lastAIMoveTo;
+    QChartView *trainingChartView;
+    QLineSeries *redScoreSeries;
+    QLineSeries *blackScoreSeries;
+    QValueAxis *axisX;
+    QValueAxis *axisY;
+	QProgressBar *trainingProgressBar;
+	QStackedWidget *stackedWidget;
+	QWidget *chessboardPage;
+	QWidget *trainingPage;
+	QWidget *chessBoardWidget;
 
     void createChessBoard();
+    void setupMenuBar();
+	void setupTrainingChart();
+	void setupPages();
     void updateBoardDisplay();
     void switchPlayer();
     void checkGameOver();
@@ -95,9 +116,61 @@ private:
     void makeAIMove();
     void highlightAIMove(int fromRow, int fromCol, int toRow, int toCol);
     void updateButtonStyle(QPushButton* button);
-    void setupMenuBar();
     void handleGameOver();
+	void onModelSaved(const QString&);
+};
 
+class Worker : public QObject
+{
+    Q_OBJECT
+public:
+    Worker(int numGames, const QString& modelFilename, QObject* parent = nullptr)
+        : QObject(parent), numGames(numGames), modelFilename(modelFilename)
+    {
+        board = new ChessBoard();
+        chessAI = new ChessAI(board);
+    }
+    ~Worker()
+    {
+        delete chessAI;
+        delete board;
+    }
+
+public slots:
+    void process()
+    {
+        // Connect chessAI signals to worker signals
+        connect(chessAI, &ChessAI::gameCompleted, this, &Worker::gameCompleted);
+        connect(chessAI, &ChessAI::trainingFinished, this, &Worker::onTrainingFinished);
+
+        // Start training
+        chessAI->train(numGames);
+
+        emit finished();
+    }
+
+signals:
+    void gameCompleted(int gameNumber, int redScore, int blackScore);
+    void trainingFinished();
+    void modelSaved(const QString& filename);
+    void finished();
+
+private slots:
+    void onTrainingFinished()
+    {
+        // Save the model
+        chessAI->saveModel(modelFilename);
+
+        // Emit signal to inform the main thread
+        emit modelSaved(modelFilename);
+        emit trainingFinished();
+    }
+
+private:
+    int numGames;
+    QString modelFilename;
+    ChessBoard* board;
+    ChessAI* chessAI;
 };
 
 #endif // MAINWINDOW_H

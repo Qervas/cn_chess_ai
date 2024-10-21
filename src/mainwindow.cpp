@@ -1,28 +1,32 @@
 #include "mainwindow.h"
 #include "chessai.h"
+#include <QMediaPlayer>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QProcess>
+#include <QThread>
+#include <QPushButton>
 
+QMediaPlayer *createMediaPlayer(QObject *parent) {
+    QMediaPlayer *player = new QMediaPlayer(parent);
+    if (!player->isAvailable()) {
+        delete player;
+        qDebug() << "Default backend not available, trying GStreamer";
+        QProcess::execute("export", QStringList() << "QT_MULTIMEDIA_PREFERRED_PLUGINS=gstreamer");
+        player = new QMediaPlayer(parent);
+    }
+    return player;
+}
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), currentPlayer(PieceColor::Red), redScore(0), blackScore(0), gameStarted(false),
      currentActionState(ActionState::SelectPiece), currentSelectedButton(nullptr),
      lastAIMoveFrom(-1, -1), lastAIMoveTo(-1, -1)
 {
-    createChessBoard();
-    updateBoardDisplay();
-
-    setMinimumSize(700, 926);
-
-
-    // create status bar
-    redScoreLabel = new QLabel("Red Score: 0", this);
-    blackScoreLabel = new QLabel("Black Score: 0", this);
-    statusBar()->addPermanentWidget(redScoreLabel);
-    statusBar()->addPermanentWidget(blackScoreLabel);
-
     // Initialize sound effects
-    selectSound = new QMediaPlayer(this);
-    moveSound = new QMediaPlayer(this);
-    captureSound = new QMediaPlayer(this);
+    selectSound = createMediaPlayer(this);
+    moveSound = createMediaPlayer(this);
+    captureSound = createMediaPlayer(this);
     selectSound->setSource(QUrl("qrc:/resources/sounds/select.mp3"));
     moveSound->setSource(QUrl("qrc:/resources/sounds/move.mp3"));
     captureSound->setSource(QUrl("qrc:/resources/sounds/capture.mp3"));
@@ -36,12 +40,12 @@ MainWindow::MainWindow(QWidget *parent)
         QLabel {
             font-weight: bold;
             font-size: 14pt;
-            color: #ff0000; /* Red color for visibility */
+            color: #ff0000; 
         }
         QStatusBar {
             font-weight: bold;
             font-size: 14pt;
-            color: #ff0000; /* Red color for visibility */
+            color: #ff0000; 
         }
         QPushButton {
             background-color: #f0d9b5;
@@ -56,16 +60,12 @@ MainWindow::MainWindow(QWidget *parent)
 
     setWindowTitle("Chinese Chess");
 
-    logFile.setFileName("ai_game_log.txt");
-    if (!logFile.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Append)) {
-        qDebug() << "Failed to open log file";
-    }
-
     // create AI object
-    chessAI = new ChessAI(&chessBoard, this);
-    connect(chessAI, &ChessAI::gameCompleted, this, &MainWindow::onGameCompleted);
-
+    chessAI = new ChessAI(&chessBoard);
     setupMenuBar();
+	setupPages();
+
+	connect(chessAI, &ChessAI::gameCompleted, this, &MainWindow::updateTrainingChart);
 }
 
 MainWindow::~MainWindow() {
@@ -73,9 +73,6 @@ MainWindow::~MainWindow() {
         for (auto& button : row) {
             delete button;
         }
-    }
-    if (logFile.isOpen()) {
-        logFile.close();
     }
     delete selectSound;
     delete moveSound;
@@ -95,6 +92,7 @@ void MainWindow::onGameModeChanged(QAction *action)
     }
 
     resetGame();
+	stackedWidget->setCurrentIndex(0);
 
     switch (currentGameMode) {
         case GameMode::HumanVsHuman:
@@ -164,8 +162,8 @@ void MainWindow::resetGame()
 }
 
 void MainWindow::createChessBoard() {
-    QWidget *centralWidget = new QWidget(this);
-    QGridLayout *gridLayout = new QGridLayout(centralWidget);
+    chessBoardWidget = new QWidget(this);
+    QGridLayout *gridLayout = new QGridLayout(chessBoardWidget);
 
     buttons.resize(10);
     for (int i = 0; i < 10; ++i) {
@@ -181,8 +179,6 @@ void MainWindow::createChessBoard() {
             buttons[i][j] = button;
         }
     }
-
-    setCentralWidget(centralWidget);
 }
 
 void MainWindow::updateBoardDisplay() {
@@ -546,25 +542,46 @@ void MainWindow::setupMenuBar()
 void MainWindow::trainAI()
 {
     bool ok;
-    int episodes = QInputDialog::getInt(this, tr("Train AI"),
-                                        tr("Number of episodes:"), 1000, 1, 1000000, 1, &ok);
+    numGames = QInputDialog::getInt(this, tr("Train AI"),
+                                    tr("Number of games:"), 1000, 1, 1000000, 1, &ok);
     if (ok) {
+        // Ask user for filename to save the model
+        QString filename = QFileDialog::getSaveFileName(this, tr("Save AI Model"),
+                                                        "", tr("AI Model Files (*.bin)"));
+        if (filename.isEmpty()) {
+            // User canceled, do not proceed
+            return;
+        }
+
+        // GUI: Switch to the training page
+        stackedWidget->setCurrentIndex(1);
+
+        // Logic: Reset training visuals
+        redScoreSeries->clear();
+        blackScoreSeries->clear();
+        trainingProgressBar->setValue(0);
         QMessageBox::information(this, tr("Training Started"),
                                  tr("AI training started. This may take a while."));
-        chessAI->train(episodes);
-        QMessageBox::information(this, tr("Training Completed"),
-                                 tr("AI training completed."));
-    }
-}
+        axisX->setMin(0);
+        axisY->setMin(0);
+        axisY->setMax(1000);
+        axisX->setMax(numGames);
 
-void MainWindow::loadTrainedAI()
-{
-    QString filename = QFileDialog::getOpenFileName(this, tr("Load AI Model"),
-                                                    "", tr("AI Model Files (*.bin)"));
-    if (!filename.isEmpty()) {
-        chessAI->loadModel(filename);
-        QMessageBox::information(this, tr("Model Loaded"),
-                                 tr("AI model loaded successfully."));
+        // Create a worker object
+        QThread *thread = new QThread;
+        Worker *worker = new Worker(numGames, filename);
+        worker->moveToThread(thread);
+
+        // Connect signals and slots
+        connect(thread, &QThread::started, worker, &Worker::process);
+        connect(worker, &Worker::gameCompleted, this, &MainWindow::updateTrainingChart);
+        connect(worker, &Worker::modelSaved, this, &MainWindow::onModelSaved);
+        connect(worker, &Worker::trainingFinished, thread, &QThread::quit);
+        connect(worker, &Worker::finished, worker, &Worker::deleteLater);
+        connect(thread, &QThread::finished, thread, &QThread::deleteLater);
+
+        // Start the thread
+        thread->start();
     }
 }
 
@@ -582,19 +599,12 @@ void MainWindow::saveTrainedAI()
 void MainWindow::runAIGame()
 {
     // Here we only run one AI vs AI game
-    resetGame();
     currentGameMode = GameMode::AIVsAI;
 
     while (!chessBoard.checkGameOver()) {
         makeAIMove();
         updateBoardDisplay();
         QApplication::processEvents();
-        QTimer::singleShot(500, this, [this]() {
-            // Code that needs to be executed after a delay
-            makeAIMove();
-            updateBoardDisplay();
-            checkGameOver();
-        });
     }
 
     checkGameOver();
@@ -607,7 +617,7 @@ void MainWindow::makeAIMove()
         return;
     }
 
-    QPair<QPair<int, int>, QPair<int, int>> move = chessAI->getAIMove(currentPlayer);
+    auto move = chessAI->getAIMove(currentPlayer);
     int fromRow = move.first.first;
     int fromCol = move.first.second;
     int toRow = move.second.first;
@@ -654,28 +664,6 @@ void MainWindow::handleGameOver()
     }
 }
 
-void MainWindow::onGameCompleted(int gameNumber, int redScore, int blackScore)
-{
-    updateScoreDisplay();
-    QString result = (redScore > blackScore) ? "Red wins!" : (blackScore > redScore) ? "Black wins!" : "It's a draw!";
-
-    // Write the result to the log file
-    QTextStream out(&logFile);
-    out << QString("Game %1 completed. Red Score: %2, Black Score: %3. %4\n")
-           .arg(gameNumber).arg(redScore).arg(blackScore).arg(result);
-
-    // If it is the last game, you can add summary information here
-    if (gameNumber == numGames) {
-        out << QString("AI self-play session completed. Total games: %1\n\n").arg(numGames);
-    }
-
-    // Ensure the data is written to the file
-    logFile.flush();
-
-    // Optional: Output the result to the console
-    qDebug() << QString("Game %1 completed. Red Score: %2, Black Score: %3. %4")
-                .arg(gameNumber).arg(redScore).arg(blackScore).arg(result);
-}
 
 void MainWindow::updateButtonStyle(QPushButton* button)
 {
@@ -714,4 +702,133 @@ void MainWindow::highlightAIMove(int fromRow, int fromCol, int toRow, int toCol)
     // Force the UI to update
     buttons[fromRow][fromCol]->update();
     buttons[toRow][toCol]->update();
+}
+
+void MainWindow::setupTrainingChart()
+{
+    // Initialize the series
+    redScoreSeries = new QLineSeries();
+    redScoreSeries->setName("Red Score");
+
+    blackScoreSeries = new QLineSeries();
+    blackScoreSeries->setName("Black Score");
+
+    // Create the chart
+    QChart *chart = new QChart();
+    chart->addSeries(redScoreSeries);
+    chart->addSeries(blackScoreSeries);
+    chart->setTitle("Training Progress");
+
+    // Create axes
+    axisX = new QValueAxis;
+    axisX->setTitleText("Game Number");
+    axisX->setLabelFormat("%d");
+    axisX->setRange(0, numGames);
+
+    axisY = new QValueAxis;
+    axisY->setTitleText("Score");
+    axisY->setLabelFormat("%d");
+    axisY->setRange(0, 1000); 
+
+    chart->addAxis(axisX, Qt::AlignBottom);
+    chart->addAxis(axisY, Qt::AlignLeft);
+
+    redScoreSeries->attachAxis(axisX);
+    redScoreSeries->attachAxis(axisY);
+
+    blackScoreSeries->attachAxis(axisX);
+    blackScoreSeries->attachAxis(axisY);
+
+    // Create and configure the chart view
+    trainingChartView = new QChartView(chart);
+    trainingChartView->setRenderHint(QPainter::Antialiasing);
+}
+
+void MainWindow::updateTrainingChart(int gameNumber, int redScore, int blackScore)
+{
+	QMetaObject::invokeMethod(this, [=](){
+
+	    // Update the series with new data points
+	    redScoreSeries->append(gameNumber, redScore);
+	    blackScoreSeries->append(gameNumber, blackScore);
+		trainingProgressBar->setValue(gameNumber);
+
+	    if (gameNumber > axisX->max()) {
+	        axisX->setMax(gameNumber + numGames * 0.1); // Increase range by 10%
+	    }
+
+	    if (redScore > axisY->max() || blackScore > axisY->max()) {
+	        int newMax = std::max(redScore, blackScore) + 100; 
+	        axisY->setMax(newMax);
+	    }
+
+	    // To improve performance with large datasets, limit the number of points
+	    const int maxPoints = 1000;
+	    if (redScoreSeries->count() > maxPoints) {
+	        redScoreSeries->removePoints(0, redScoreSeries->count() - maxPoints);
+	        blackScoreSeries->removePoints(0, blackScoreSeries->count() - maxPoints);
+	        axisX->setMin(gameNumber - maxPoints);
+	    }
+	}, Qt::QueuedConnection);
+	
+}
+
+void MainWindow::setupPages(){
+	stackedWidget = new QStackedWidget(this);
+
+	// Initialize chessboardPage
+	chessboardPage = new QWidget();
+	QVBoxLayout *chessLayout = new QVBoxLayout(chessboardPage);
+
+	createChessBoard();
+	updateBoardDisplay();
+	chessLayout->addWidget(chessBoardWidget);
+
+	// Initialize status bar labels
+	redScoreLabel = new QLabel("Red Score: 0", this);
+	blackScoreLabel = new QLabel("Black Score: 0", this);
+	statusBar()->addPermanentWidget(redScoreLabel);
+	statusBar()->addPermanentWidget(blackScoreLabel);
+
+	// Initialize trainingPage
+	trainingPage = new QWidget(); // Proper initialization
+	QVBoxLayout *trainingLayout = new QVBoxLayout(trainingPage);
+	
+	setupTrainingChart();
+	trainingLayout->addWidget(trainingChartView);
+
+	trainingProgressBar = new QProgressBar(this);
+	trainingProgressBar->setRange(0, numGames);
+	trainingProgressBar->setValue(0);
+	trainingProgressBar->setFormat("Training Progress: %p%");
+	trainingLayout->addWidget(trainingProgressBar); // Add progress bar to layout
+
+	// Add pages to stackedWidget
+	stackedWidget->addWidget(chessboardPage);
+	stackedWidget->addWidget(trainingPage);
+
+	// Set stackedWidget as the central widget
+	setCentralWidget(stackedWidget);
+	stackedWidget->setCurrentIndex(0);
+}
+
+void MainWindow::onModelSaved(const QString& filename)
+{
+    QMessageBox::information(this, tr("Training Completed"),
+                             tr("Training completed and model saved to %1").arg(filename));
+}
+
+void MainWindow::loadTrainedAI(){
+    QString filename = QFileDialog::getOpenFileName(this, tr("Load AI Model"),
+                                                    "", tr("AI Model Files (*.bin)"));
+    if (!filename.isEmpty()) {
+        // Ensure chessAI and its dqn are properly initialized in the main thread
+        if (!chessAI) {
+            chessAI = new ChessAI(&chessBoard);
+        }
+        chessAI->initializeDQN(); // A method to initialize dqn in the main thread
+        chessAI->loadModel(filename);
+        QMessageBox::information(this, tr("Model Loaded"),
+                                 tr("AI model loaded successfully."));
+    }	
 }
