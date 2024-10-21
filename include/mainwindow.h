@@ -50,7 +50,6 @@ public:
 private slots:
     void onButtonClicked();
     void onGameModeChanged(QAction *action);
-    void onGameCompleted(int gameNumber, int redScore, int blackScore);
     void trainAI();
     void loadTrainedAI();
     void saveTrainedAI();
@@ -85,7 +84,6 @@ private:
     int numGames{1000};
     enum class GameMode { HumanVsHuman, AIVsAI, HumanVsAI };
     GameMode currentGameMode;
-    QFile logFile;
     PieceColor aiColor;
     QPair<int, int> lastAIMoveFrom;
     QPair<int, int> lastAIMoveTo;
@@ -119,8 +117,60 @@ private:
     void highlightAIMove(int fromRow, int fromCol, int toRow, int toCol);
     void updateButtonStyle(QPushButton* button);
     void handleGameOver();
-	
+	void onModelSaved(const QString&);
+};
 
+class Worker : public QObject
+{
+    Q_OBJECT
+public:
+    Worker(int numGames, const QString& modelFilename, QObject* parent = nullptr)
+        : QObject(parent), numGames(numGames), modelFilename(modelFilename)
+    {
+        board = new ChessBoard();
+        chessAI = new ChessAI(board);
+    }
+    ~Worker()
+    {
+        delete chessAI;
+        delete board;
+    }
+
+public slots:
+    void process()
+    {
+        // Connect chessAI signals to worker signals
+        connect(chessAI, &ChessAI::gameCompleted, this, &Worker::gameCompleted);
+        connect(chessAI, &ChessAI::trainingFinished, this, &Worker::onTrainingFinished);
+
+        // Start training
+        chessAI->train(numGames);
+
+        emit finished();
+    }
+
+signals:
+    void gameCompleted(int gameNumber, int redScore, int blackScore);
+    void trainingFinished();
+    void modelSaved(const QString& filename);
+    void finished();
+
+private slots:
+    void onTrainingFinished()
+    {
+        // Save the model
+        chessAI->saveModel(modelFilename);
+
+        // Emit signal to inform the main thread
+        emit modelSaved(modelFilename);
+        emit trainingFinished();
+    }
+
+private:
+    int numGames;
+    QString modelFilename;
+    ChessBoard* board;
+    ChessAI* chessAI;
 };
 
 #endif // MAINWINDOW_H

@@ -7,9 +7,11 @@
 #include <QString>
 #include <QPair>
 #include <vector>
+#include <QFile>
+#include <QTextStream>
 #include "chessboard.h"
 #include "dqn.h"
-#include "action.h" // Include the Action structure
+#include "action.h"
 
 class ChessAI : public QObject
 {
@@ -17,9 +19,12 @@ class ChessAI : public QObject
 
 public:
     explicit ChessAI(ChessBoard* board);
+    ~ChessAI();
     QPair<QPair<int, int>, QPair<int, int>> getAIMove(PieceColor color);
     void saveModel(const QString& filename);
     void loadModel(const QString& filename);
+	void onGameCompleted(int gameNumber, int redScore, int blackScore);
+	void initializeDQN();
 
 public slots:
     void train(int numEpisodes);
@@ -44,6 +49,9 @@ private:
 
     // New method to gather all valid actions for the current player
     std::vector<Action> getAllValidActions(PieceColor player) const;
+
+    QFile logFile;
+    int numGames; 
 };
 
 #endif // CHESSAI_H

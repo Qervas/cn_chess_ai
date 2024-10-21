@@ -62,8 +62,6 @@ MainWindow::MainWindow(QWidget *parent)
 
     // create AI object
     chessAI = new ChessAI(&chessBoard);
-    connect(chessAI, &ChessAI::gameCompleted, this, &MainWindow::onGameCompleted);
-
     setupMenuBar();
 	setupPages();
 
@@ -75,9 +73,6 @@ MainWindow::~MainWindow() {
         for (auto& button : row) {
             delete button;
         }
-    }
-    if (logFile.isOpen()) {
-        logFile.close();
     }
     delete selectSound;
     delete moveSound;
@@ -550,9 +545,17 @@ void MainWindow::trainAI()
     numGames = QInputDialog::getInt(this, tr("Train AI"),
                                     tr("Number of games:"), 1000, 1, 1000000, 1, &ok);
     if (ok) {
+        // Ask user for filename to save the model
+        QString filename = QFileDialog::getSaveFileName(this, tr("Save AI Model"),
+                                                        "", tr("AI Model Files (*.bin)"));
+        if (filename.isEmpty()) {
+            // User canceled, do not proceed
+            return;
+        }
+
         // GUI: Switch to the training page
         stackedWidget->setCurrentIndex(1);
-        
+
         // Logic: Reset training visuals
         redScoreSeries->clear();
         blackScoreSeries->clear();
@@ -561,43 +564,24 @@ void MainWindow::trainAI()
                                  tr("AI training started. This may take a while."));
         axisX->setMin(0);
         axisY->setMin(0);
-        axisY->setMax(1000);								
-        axisX->setMax(numGames); // Ensure axisX is set after setting max for Y
+        axisY->setMax(1000);
+        axisX->setMax(numGames);
 
-        // Create a thread and move ChessAI to it
+        // Create a worker object
         QThread *thread = new QThread;
-        chessAI->moveToThread(thread);
+        Worker *worker = new Worker(numGames, filename);
+        worker->moveToThread(thread);
 
-        // Connect thread started signal to ChessAI's train slot
-        connect(thread, &QThread::started, [=]() {
-            chessAI->train(numGames);
-        });
-
-        // Connect ChessAI's signals to MainWindow's slots
-        connect(chessAI, &ChessAI::gameCompleted, this, &MainWindow::updateTrainingChart);
-        connect(chessAI, &ChessAI::trainingFinished, thread, &QThread::quit);
-        connect(chessAI, &ChessAI::trainingFinished, chessAI, &ChessAI::deleteLater);
+        // Connect signals and slots
+        connect(thread, &QThread::started, worker, &Worker::process);
+        connect(worker, &Worker::gameCompleted, this, &MainWindow::updateTrainingChart);
+        connect(worker, &Worker::modelSaved, this, &MainWindow::onModelSaved);
+        connect(worker, &Worker::trainingFinished, thread, &QThread::quit);
+        connect(worker, &Worker::finished, worker, &Worker::deleteLater);
         connect(thread, &QThread::finished, thread, &QThread::deleteLater);
 
         // Start the thread
         thread->start();
-
-        // Optionally, handle thread finished signal to re-enable buttons
-        connect(thread, &QThread::finished, this, [=]() {
-            // ui->trainButton->setEnabled(true); // Re-enable the train button
-            QMessageBox::information(this, "Training", "Training completed!");
-        });
-    }
-}
-
-void MainWindow::loadTrainedAI()
-{
-    QString filename = QFileDialog::getOpenFileName(this, tr("Load AI Model"),
-                                                    "", tr("AI Model Files (*.bin)"));
-    if (!filename.isEmpty()) {
-        chessAI->loadModel(filename);
-        QMessageBox::information(this, tr("Model Loaded"),
-                                 tr("AI model loaded successfully."));
     }
 }
 
@@ -680,28 +664,6 @@ void MainWindow::handleGameOver()
     }
 }
 
-void MainWindow::onGameCompleted(int gameNumber, int redScore, int blackScore)
-{
-    updateScoreDisplay();
-    QString result = (redScore > blackScore) ? "Red wins!" : (blackScore > redScore) ? "Black wins!" : "It's a draw!";
-
-    // Write the result to the log file
-    QTextStream out(&logFile);
-    out << QString("Game %1 completed. Red Score: %2, Black Score: %3. %4\n")
-           .arg(gameNumber).arg(redScore).arg(blackScore).arg(result);
-
-    // If it is the last game, you can add summary information here
-    if (gameNumber == numGames) {
-        out << QString("AI self-play session completed. Total games: %1\n\n").arg(numGames);
-    }
-
-    // Ensure the data is written to the file
-    logFile.flush();
-
-    // Optional: Output the result to the console
-    qDebug() << QString("Game %1 completed. Red Score: %2, Black Score: %3. %4")
-                .arg(gameNumber).arg(redScore).arg(blackScore).arg(result);
-}
 
 void MainWindow::updateButtonStyle(QPushButton* button)
 {
@@ -784,28 +746,31 @@ void MainWindow::setupTrainingChart()
 
 void MainWindow::updateTrainingChart(int gameNumber, int redScore, int blackScore)
 {
-    // Update the series with new data points
-    redScoreSeries->append(gameNumber, redScore);
-    blackScoreSeries->append(gameNumber, blackScore);
-	trainingProgressBar->setValue(gameNumber);
+	QMetaObject::invokeMethod(this, [=](){
 
-    // Optionally, update the axis ranges if necessary
-    if (gameNumber > axisX->max()) {
-        axisX->setMax(gameNumber + numGames * 0.1); // Increase range by 10%
-    }
+	    // Update the series with new data points
+	    redScoreSeries->append(gameNumber, redScore);
+	    blackScoreSeries->append(gameNumber, blackScore);
+		trainingProgressBar->setValue(gameNumber);
 
-    if (redScore > axisY->max() || blackScore > axisY->max()) {
-        int newMax = std::max(redScore, blackScore) + 100; 
-        axisY->setMax(newMax);
-    }
+	    if (gameNumber > axisX->max()) {
+	        axisX->setMax(gameNumber + numGames * 0.1); // Increase range by 10%
+	    }
 
-    // To improve performance with large datasets, limit the number of points
-    const int maxPoints = 1000;
-    if (redScoreSeries->count() > maxPoints) {
-        redScoreSeries->removePoints(0, redScoreSeries->count() - maxPoints);
-        blackScoreSeries->removePoints(0, blackScoreSeries->count() - maxPoints);
-        axisX->setMin(gameNumber - maxPoints);
-    }
+	    if (redScore > axisY->max() || blackScore > axisY->max()) {
+	        int newMax = std::max(redScore, blackScore) + 100; 
+	        axisY->setMax(newMax);
+	    }
+
+	    // To improve performance with large datasets, limit the number of points
+	    const int maxPoints = 1000;
+	    if (redScoreSeries->count() > maxPoints) {
+	        redScoreSeries->removePoints(0, redScoreSeries->count() - maxPoints);
+	        blackScoreSeries->removePoints(0, blackScoreSeries->count() - maxPoints);
+	        axisX->setMin(gameNumber - maxPoints);
+	    }
+	}, Qt::QueuedConnection);
+	
 }
 
 void MainWindow::setupPages(){
@@ -847,4 +812,23 @@ void MainWindow::setupPages(){
 	stackedWidget->setCurrentIndex(0);
 }
 
+void MainWindow::onModelSaved(const QString& filename)
+{
+    QMessageBox::information(this, tr("Training Completed"),
+                             tr("Training completed and model saved to %1").arg(filename));
+}
 
+void MainWindow::loadTrainedAI(){
+    QString filename = QFileDialog::getOpenFileName(this, tr("Load AI Model"),
+                                                    "", tr("AI Model Files (*.bin)"));
+    if (!filename.isEmpty()) {
+        // Ensure chessAI and its dqn are properly initialized in the main thread
+        if (!chessAI) {
+            chessAI = new ChessAI(&chessBoard);
+        }
+        chessAI->initializeDQN(); // A method to initialize dqn in the main thread
+        chessAI->loadModel(filename);
+        QMessageBox::information(this, tr("Model Loaded"),
+                                 tr("AI model loaded successfully."));
+    }	
+}

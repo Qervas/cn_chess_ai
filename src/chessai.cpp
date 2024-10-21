@@ -4,17 +4,26 @@
 #include <cstdlib>
 #include <ctime>
 #include <algorithm>
+#include <QFile>
+#include <QTextStream>
 
 ChessAI::ChessAI(ChessBoard* board)
     : board(board)
 {
      std::srand(static_cast<unsigned int>(std::time(nullptr)));
-	// Define state and action sizes based on the new representation
-    int stateSize = 90 * 14; // 90 squares, 14 possible pieces (7 types * 2 colors)
-    int actionSize = 90 * 90; // From any square to any square
 
-    // Initialize the DQN with the specified architecture
-    dqn = std::make_unique<DQN>(std::vector<int>{stateSize, 128, actionSize});
+
+    // Open the log file
+    logFile.setFileName("game_log.txt");
+    if (!logFile.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+        qWarning() << "Failed to open log file:" << logFile.errorString();
+    }
+}
+
+ChessAI::~ChessAI() {
+    if (logFile.isOpen()) {
+        logFile.close();
+    }
 }
 
 QPair<QPair<int, int>, QPair<int, int>> ChessAI::getAIMove(PieceColor color)
@@ -75,6 +84,7 @@ QPair<QPair<int, int>, QPair<int, int>> ChessAI::getAIMove(PieceColor color)
 
 void ChessAI::train(int numEpisodes)
 {
+	initializeDQN();
     for (int episode = 0; episode < numEpisodes; ++episode) {
         board->reset();
         PieceColor currentPlayer = PieceColor::Red;
@@ -147,12 +157,20 @@ void ChessAI::train(int numEpisodes)
 
 void ChessAI::saveModel(const QString& filename)
 {
-    dqn->saveModel(filename.toStdString());
+    if (dqn) {
+        dqn->saveModel(filename.toStdString());
+    } else {
+        qWarning() << "DQN is not initialized. Cannot save model.";
+    }
 }
 
 void ChessAI::loadModel(const QString& filename)
 {
-    dqn->loadModel(filename.toStdString());
+    if (dqn) {
+        dqn->loadModel(filename.toStdString());
+    } else {
+        qWarning() << "DQN is not initialized. Cannot load model.";
+    }
 }
 
 void ChessAI::startSelfPlay(int numGames)
@@ -329,4 +347,40 @@ std::vector<Action> ChessAI::getAllValidActions(PieceColor player) const
     }
 
     return validActions;
+}
+
+void ChessAI::onGameCompleted(int gameNumber, int redScore, int blackScore) {
+    if (!logFile.isOpen()) {
+        qWarning() << "Log file is not open";
+        return;
+    }
+
+    QString result = (redScore > blackScore) ? "Red wins!" : (blackScore > redScore) ? "Black wins!" : "It's a draw!";
+
+    QTextStream out(&logFile);
+    out << QString("Game %1 completed. Red Score: %2, Black Score: %3. %4\n")
+           .arg(gameNumber).arg(redScore).arg(blackScore).arg(result);
+
+    // If it is the last game, you can add summary information here
+    if (gameNumber == numGames) {
+        out << QString("AI self-play session completed. Total games: %1\n\n").arg(numGames);
+    }
+
+    // Ensure the data is written to the file
+    logFile.flush();
+
+    // Optional: Output the result to the console
+    qDebug() << QString("Game %1 completed. Red Score: %2, Black Score: %3. %4")
+                .arg(gameNumber).arg(redScore).arg(blackScore).arg(result);
+}
+
+void ChessAI::initializeDQN()
+{
+    if (!dqn) {
+        // Define state and action sizes based on the new representation
+        int stateSize = 90 * 14; // 90 squares, 14 possible pieces (7 types * 2 colors)
+        int actionSize = 90 * 90; // From any square to any square
+
+        dqn = std::make_unique<DQN>(std::vector<int>{stateSize, 128, actionSize});
+    }
 }

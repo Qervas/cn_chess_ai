@@ -6,6 +6,7 @@
 #include <ctime>
 #include <limits>
 #include <QDebug>
+#include <QFile>
 
 // Constructor
 DQN::DQN(const std::vector<int>& layerSizes, double learningRate, double gamma)
@@ -16,11 +17,8 @@ DQN::DQN(const std::vector<int>& layerSizes, double learningRate, double gamma)
 {
     updateTargetNetwork();
     std::srand(static_cast<unsigned int>(std::time(nullptr))); // Seed RNG
-
 }
 
-// Destructor
-DQN::~DQN() = default;
 
 // Select action using epsilon-greedy strategy
 Action DQN::selectAction(const std::vector<double>& state, double epsilon, const std::vector<Action> validActions)
@@ -77,36 +75,33 @@ void DQN::updateTargetNetwork() {
 // Save model weights and biases
 void DQN::saveModel(const std::string& filename)
 {
-    // Open the file in binary mode
-    std::ofstream outFile(filename, std::ios::binary);
-    if (!outFile.is_open()) {
+    QFile outFile(QString::fromStdString(filename));
+    if (!outFile.open(QIODevice::WriteOnly)) {
         throw std::runtime_error("Unable to open file for saving model.");
     }
 
+    QDataStream out(&outFile);
+    out.setVersion(QDataStream::Qt_6_6);
+	
     // Serialize weights
     size_t weightsSize = qNetwork->host_weights.size();
-    outFile.write(reinterpret_cast<const char*>(qNetwork->host_weights.data()), weightsSize * sizeof(double));
-    if (!outFile) {
+    out.writeRawData(reinterpret_cast<const char*>(qNetwork->host_weights.data()), weightsSize * sizeof(double));
+    if (out.status() != QDataStream::Ok) {
         throw std::runtime_error("Error writing weights to model file.");
     }
 
     // Serialize biases
     size_t biasesSize = qNetwork->host_biases.size();
-    outFile.write(reinterpret_cast<const char*>(qNetwork->host_biases.data()), biasesSize * sizeof(double));
-    if (!outFile) {
+    out.writeRawData(reinterpret_cast<const char*>(qNetwork->host_biases.data()), biasesSize * sizeof(double));
+    if (out.status() != QDataStream::Ok) {
         throw std::runtime_error("Error writing biases to model file.");
     }
 
-    // Optionally, serialize layer sizes for validation during loading
+    // Serialize layer sizes
     size_t layerSizesSize = qNetwork->layerSizes.size();
-    outFile.write(reinterpret_cast<const char*>(&layerSizesSize), sizeof(size_t));
-    if (!outFile) {
-        throw std::runtime_error("Error writing layer sizes to model file.");
-    }
-
-    outFile.write(reinterpret_cast<const char*>(qNetwork->layerSizes.data()), layerSizesSize * sizeof(int));
-    if (!outFile) {
-        throw std::runtime_error("Error writing layer sizes to model file.");
+    out << static_cast<quint64>(layerSizesSize);
+    for (int size : qNetwork->layerSizes) {
+        out << size;
     }
 
     outFile.close();

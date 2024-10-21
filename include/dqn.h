@@ -98,7 +98,7 @@ class DQN : public QObject {
     Q_OBJECT
 public:
     DQN(const std::vector<int>& layerSizes, double learningRate = 0.001, double gamma = 0.99);
-    virtual ~DQN();
+    virtual ~DQN() = default;
 
     Action selectAction(const std::vector<double>& state, double epsilon, const std::vector<Action> validActions);
     void backpropagate(const std::vector<double>& state, const std::vector<double>& target, double learningRate);
