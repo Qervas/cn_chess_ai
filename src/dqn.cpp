@@ -110,37 +110,36 @@ void DQN::saveModel(const std::string& filename)
 // Load model weights and biases
 void DQN::loadModel(const std::string& filename)
 {
-    // Open the file in binary mode
-    std::ifstream inFile(filename, std::ios::binary);
-    if (!inFile.is_open()) {
+    QFile inFile(QString::fromStdString(filename));
+    if (!inFile.open(QIODevice::ReadOnly)) {
         throw std::runtime_error("Unable to open file for loading model.");
     }
 
+    QDataStream in(&inFile);
+    in.setVersion(QDataStream::Qt_6_6);
+
     // Deserialize weights
     size_t weightsSize = qNetwork->host_weights.size();
-    inFile.read(reinterpret_cast<char*>(qNetwork->host_weights.data()), weightsSize * sizeof(double));
-    if (inFile.gcount() != static_cast<std::streamsize>(weightsSize * sizeof(double))) {
+    in.readRawData(reinterpret_cast<char*>(qNetwork->host_weights.data()), weightsSize * sizeof(double));
+    if (in.status() != QDataStream::Ok) {
         throw std::runtime_error("Error reading weights from model file.");
     }
 
     // Deserialize biases
     size_t biasesSize = qNetwork->host_biases.size();
-    inFile.read(reinterpret_cast<char*>(qNetwork->host_biases.data()), biasesSize * sizeof(double));
-    if (inFile.gcount() != static_cast<std::streamsize>(biasesSize * sizeof(double))) {
+    in.readRawData(reinterpret_cast<char*>(qNetwork->host_biases.data()), biasesSize * sizeof(double));
+    if (in.status() != QDataStream::Ok) {
         throw std::runtime_error("Error reading biases from model file.");
     }
 
-    // Optionally, deserialize layer sizes for validation
-    size_t layerSizesSize = 0;
-    inFile.read(reinterpret_cast<char*>(&layerSizesSize), sizeof(size_t));
-    if (inFile.gcount() != sizeof(size_t)) {
-        throw std::runtime_error("Error reading layer sizes from model file.");
-    }
-
+    // Deserialize layer sizes
+    quint64 layerSizesSize;
+    in >> layerSizesSize;
     std::vector<int> loadedLayerSizes(layerSizesSize);
-    inFile.read(reinterpret_cast<char*>(loadedLayerSizes.data()), layerSizesSize * sizeof(int));
-    if (inFile.gcount() != static_cast<std::streamsize>(layerSizesSize * sizeof(int))) {
-        throw std::runtime_error("Error reading layer sizes from model file.");
+    for (quint64 i = 0; i < layerSizesSize; ++i) {
+        int size;
+        in >> size;
+        loadedLayerSizes[i] = size;
     }
 
     // Validate layer sizes
